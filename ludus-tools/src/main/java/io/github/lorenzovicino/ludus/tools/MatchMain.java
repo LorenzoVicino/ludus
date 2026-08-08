@@ -1,6 +1,8 @@
 package io.github.lorenzovicino.ludus.tools;
 
+import io.github.lorenzovicino.ludus.core.Bitboards;
 import io.github.lorenzovicino.ludus.core.Board;
+import io.github.lorenzovicino.ludus.core.MoveGenerator;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -9,8 +11,10 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Command line entry point for the match runner.
@@ -66,6 +70,7 @@ public final class MatchMain {
         double beta = 0.05;
         long seed = 20260808L;
         boolean stopOnVerdict = true;
+        int openingPlies = 8;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -77,6 +82,7 @@ public final class MatchMain {
                 case "--concurrency" -> concurrency = Integer.parseInt(require(args, ++i, "--concurrency"));
                 case "--max-plies" -> maxPlies = Integer.parseInt(require(args, ++i, "--max-plies"));
                 case "--seed" -> seed = Long.parseLong(require(args, ++i, "--seed"));
+                case "--opening-plies" -> openingPlies = Integer.parseInt(require(args, ++i, "--opening-plies"));
                 case "--fixed" -> stopOnVerdict = false;
                 case "--sprt" -> {
                     elo0 = Double.parseDouble(require(args, ++i, "--sprt elo0"));
@@ -97,7 +103,7 @@ public final class MatchMain {
         }
 
         List<String> openings = book == null
-                ? List.of(Board.START_FEN)
+                ? generateBook(pairs, openingPlies, seed)
                 : loadBook(book, seed);
 
         Sprt sprt = new Sprt(elo0, elo1, alpha, beta);
@@ -143,6 +149,64 @@ public final class MatchMain {
             case H0_ACCEPTED -> "H0 accepted — A is not better, the change is dropped";
             case INCONCLUSIVE -> "inconclusive — the match ran out of openings before deciding";
         };
+    }
+
+    /**
+     * Builds an opening book by walking a few random legal moves out of the start position.
+     *
+     * <p>Generating beats downloading one. A curated book is a file that has to exist on whatever
+     * machine runs the match, which makes CI depend on fetching it; this needs nothing but the move
+     * generator that is already here, and {@code --seed} makes it reproducible.
+     *
+     * <p>Positions where anything has been captured are rejected. Random moves hang pieces, and an
+     * opening that starts a rook down is not a test of anything. Requiring the full complement of
+     * material is a cruder filter than an evaluation would be, but it needs no evaluation — which
+     * keeps this module dependent on the core alone — and it is decisive rather than approximate.
+     *
+     * <p>Residual imbalance does not matter much anyway: every opening is played twice with the
+     * colours swapped, so a position that favours one side hands the same advantage to each engine
+     * in turn.
+     */
+    private static List<String> generateBook(int count, int plies, long seed) {
+        List<String> positions = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        Random random = new Random(seed);
+        int[] moves = new int[MoveGenerator.MAX_MOVES];
+
+        int attempts = 0;
+        int attemptLimit = Math.max(1000, count * 200);
+
+        while (positions.size() < count && attempts < attemptLimit) {
+            attempts++;
+            Board board = Board.startPosition();
+            boolean playable = true;
+
+            for (int ply = 0; ply < plies; ply++) {
+                int legal = MoveGenerator.filterLegal(board, moves, MoveGenerator.generate(board, moves));
+                if (legal == 0) {
+                    playable = false;
+                    break;
+                }
+                board.makeMove(moves[random.nextInt(legal)]);
+            }
+            if (!playable || Bitboards.count(board.occupied()) != 32) {
+                continue;
+            }
+            // A position with no moves is over before either engine has played one.
+            if (MoveGenerator.filterLegal(board, moves, MoveGenerator.generate(board, moves)) == 0) {
+                continue;
+            }
+
+            String fen = board.toFen();
+            if (seen.add(fen)) {
+                positions.add(fen);
+            }
+        }
+
+        if (positions.isEmpty()) {
+            throw new IllegalStateException("Could not generate any openings");
+        }
+        return positions;
     }
 
     /**
@@ -194,7 +258,9 @@ public final class MatchMain {
 
                   --engine-a CMD     command that launches the new version
                   --engine-b CMD     command that launches the baseline
-                  --book PATH        EPD or FEN opening book, one position per line
+                  --book PATH        EPD or FEN opening book, one position per line.
+                                     Omit it and a book is generated from the start position
+                  --opening-plies K  random plies when generating a book (default 8)
                   --pairs N          opening pairs to play, two games each (default 100)
                   --movetime MS      fixed allowance per move (default 100)
                   --concurrency K    games in parallel (default: cores / 3)

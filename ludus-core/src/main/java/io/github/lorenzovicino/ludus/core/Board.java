@@ -376,6 +376,60 @@ public final class Board {
     }
 
     /**
+     * Passes the turn without moving anything.
+     *
+     * <p>Not a chess move — it is the search asking "if I did nothing at all, would this position
+     * still be good enough to stop looking?". Almost any real move beats doing nothing, so a position
+     * that survives a free move for the opponent is usually beyond saving for them.
+     *
+     * <p>The en passant square is cleared, because the right to capture it belonged to the move that
+     * is not being made.
+     */
+    public void makeNullMove() {
+        undoCaptured[ply] = Pieces.NO_PIECE;
+        undoCastling[ply] = castlingRights;
+        undoEp[ply] = epSquare;
+        undoHalfmove[ply] = halfmoveClock;
+        undoZobrist[ply] = zobrist;
+
+        if (epSquare != Squares.NONE) {
+            zobrist ^= Zobrist.EP_FILE[Squares.file(epSquare)];
+            epSquare = Squares.NONE;
+        }
+
+        halfmoveClock++;
+        if (sideToMove == Pieces.BLACK) {
+            fullmoveNumber++;
+        }
+        sideToMove = Pieces.flip(sideToMove);
+        zobrist ^= Zobrist.SIDE;
+        ply++;
+    }
+
+    public void unmakeNullMove() {
+        ply--;
+        sideToMove = Pieces.flip(sideToMove);
+        castlingRights = undoCastling[ply];
+        epSquare = undoEp[ply];
+        halfmoveClock = undoHalfmove[ply];
+        zobrist = undoZobrist[ply];
+        if (sideToMove == Pieces.BLACK) {
+            fullmoveNumber--;
+        }
+    }
+
+    /**
+     * Whether {@code color} has anything but pawns and a king.
+     *
+     * <p>The search asks before passing the turn. In an endgame of kings and pawns, being forced to
+     * move is often a disadvantage — zugzwang — so "doing nothing is bad for me" stops being a safe
+     * assumption, and a null move can prune a line that was actually lost.
+     */
+    public boolean hasNonPawnMaterial(int color) {
+        return (byColor[color] & ~(byType[Pieces.PAWN] | byType[Pieces.KING])) != 0;
+    }
+
+    /**
      * The hash computed from scratch. Used to check the incremental updates in
      * {@link #makeMove(int)} against a definition that cannot drift, and to seed a position
      * parsed from FEN.

@@ -449,7 +449,7 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 | **M0** ✅ | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
 | **M1** ✅ | Negamax, HCE minima, UCI, iterative deepening, time management, ordinamento catture | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
 | **M2** ✅ | Quiescence, TT, killer e history, SEE | Batte M1 con SPRT. Questo è il **baseline Elo** |
-| **M3** | Null move, LMR, futility, movegen legale diretta | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
+| **M3** ✅ | PVS, null move, LMR | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
 | **M4** | Inferenza NNUE, prima rete allenata | Invariante accumulatore verde, Java≈PyTorch, **SPRT vs M3 positivo** |
 | **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
 | **M6** ✅ | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
@@ -490,6 +490,50 @@ M2:  depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
 Oscillazioni da ±165 centipawn a ±30. È esattamente l'*horizon effect* che §5.2 prevedeva, misurato prima e dopo.
 
 **Cosa è slittato a M3:** null move pruning, late move reductions, futility pruning. La tabella diceva "potature" in M2; ci sono la potatura SEE in quiescence e i tagli dell'ordinamento, ma le tre potature vere no. Ognuna può nascondere un bug che perde partite solo in posizioni rare — lo zugzwang per il null move — e vanno introdotte una per volta con il proprio SPRT. Ammucchiarle qui avrebbe reso impossibile attribuire un'eventuale regressione.
+
+### 9.0 M3 — dove la disciplina "una patch per volta" si è ripagata
+
+M3 è il primo milestone in cui ogni patch ha il proprio SPRT contro la versione precedente. Alla fine di M2 avevo scritto che la ripartizione dei contributi era "un'ipotesi ragionata, non una misura", e che da qui in poi la regola andava applicata davvero. Il primo esperimento ha spiegato perché.
+
+#### Patch 1 — null move pruning: **−16 ± 36 Elo, respinta**
+
+300 partite, 120-46-134, LLR −0,62. Inconcludente e in tendenza negativa.
+
+Il numero però non è la scoperta. La patch era **provabilmente inerte**, e il motivo è istruttivo.
+
+La guardia era `isPv = beta - alpha > 1`, cioè *non fare null move sui nodi a finestra piena* — corretta in linea di principio: la speculazione va confinata dove sbagliare costa una ri-ricerca invece di corrompere il punteggio su cui il motore agisce.
+
+Ma nel codice di M2 **non esisteva una sola ricerca a finestra nulla**. Ogni figlio veniva chiamato con `(-beta, -alpha)` ereditata dal padre, e l'unica chiamata a finestra stretta in tutto il file era la sonda del null move stessa — che ricorre con `allowNull=false`. Quindi la condizione era vera a ogni nodo e il blocco non si eseguiva mai. Il −16 è rumore più il costo di valutare le guardie.
+
+**Senza SPRT per patch avrei spedito una funzionalità che non fa niente**, e l'avrei elencata nel README. È esattamente il fallimento che il gate esiste per intercettare, ed è capitato al primo tentativo.
+
+#### Patch 2 — PVS: **+119 ± 43 Elo, accettata**
+
+242 partite, 143-36-63, 66,5%, LLR +2,97, bound superato.
+
+La *principal variation search* dà a ogni mossa dopo la prima una sonda a finestra di un punto — "batte alpha, sì o no?" — e cerca sul serio solo quelle che rispondono sì. Vale da sola, ma soprattutto **crea i nodi a finestra nulla che prima non esistevano**, quindi il null move della patch 1 si attiva per la prima volta.
+
+Onestà sull'attribuzione: questo numero **non separa PVS dal null move**, e non può, perché uno è inerte senza l'altro. Non è pigrizia nel disegno dell'esperimento — è una proprietà del codice, misurata: la patch 1 da sola vale zero, e questa è la prova. Le due cose sono una modifica sola, "far funzionare la ricerca a finestra ridotta", e come tale è stata misurata.
+
+Conferma indipendente, dalla stessa posizione a profondità 4: **3641 nodi contro 2952**, −19% a parità di profondità.
+
+#### Patch 3 — late move reductions: **+58,7 ± 27 Elo, accettata**
+
+544 partite, 272-91-181, 58,4%, LLR +2,97, bound superato.
+
+Se l'ordinamento vale qualcosa, una mossa tranquilla che sta ottava in lista non è la mossa migliore, e cercarla a profondità piena è lavoro speso per confermare qualcosa di già probabile. Si cerca più corta; se la ricerca corta sbaglia e la mossa batte comunque alpha, l'errore viene intercettato e pagato subito con una ri-ricerca.
+
+Esenti: catture, promozioni, scacchi dati o subiti, e le prime mosse della lista. Sono i casi in cui una linea persa è materiale o partita persa, non un'imprecisione.
+
+**Una nota metodologica.** Il primo match si è chiuso a 300 partite con **+56,1 ± 35, LLR +1,68** — inconcludente, book esaurito. L'intervallo al 95% era già interamente sopra lo zero, e sarebbe stato comodo chiamarla buona. Ma la regola dichiarata è che decide l'SPRT, non l'occhio, quindi ho esteso il book e rigiocato: 544 partite, bound superato, **+58,7**. Il punto stimato è praticamente lo stesso — il campione più grande non ha "trovato" un risultato, ha solo raggiunto la soglia di prova che avevo fissato prima di guardare i numeri.
+
+#### Limite noto del match runner
+
+Un esito inconcludente costa **rigiocare tutto da capo**: il runner non sa riprendere né estendere un match esistente. Con partite da minuti è uno spreco reale, ed è la prima cosa da sistemare quando M4 inizierà a produrre patch da pochi Elo, dove gli inconcludenti saranno la norma e non l'eccezione.
+
+#### Cosa è rimasto fuori da M3, e perché
+
+**Futility pruning** e **movegen legale diretta** non sono entrati. Non per mancanza di tempo travestita da scelta: la movegen legale diretta è una riscrittura ad alto rischio del pezzo più delicato del motore, il cui guadagno è in nodi al secondo e non in Elo, e arriva più sensatamente accanto al lavoro sulla Vector API di M5, dove la performance è il tema. La futility è la candidata naturale per la prossima patch singola.
 
 ### 9.1 M6 — la pagina di stato
 

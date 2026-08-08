@@ -99,7 +99,7 @@ than a handicap. Some of what the constraint forces:
 | **M0** ✅ | Board, magic bitboards, move generation | The full perft suite passes |
 | **M1** ✅ | Search, evaluation, UCI | Plays a complete legal game against a GUI |
 | **M2** ✅ | Quiescence, transposition table, killers, history, SEE | Beats M1 by SPRT — the Elo baseline |
-| **M3** | Null move, late move reductions, futility, direct legal movegen | Perft still correct, every patch SPRT-positive |
+| **M3** ✅ | Principal variation search, null move, late move reductions | Perft still correct, every patch SPRT-positive |
 | **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
 | **M6** ✅ | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |

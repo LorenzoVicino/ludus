@@ -59,6 +59,14 @@ public final class Search {
     /** Nodes between clock reads. A power of two so the test is a mask, not a division. */
     private static final int TIME_CHECK_INTERVAL = 4096;
 
+    /** Below this depth a null move saves less than the search it costs. */
+    private static final int NULL_MOVE_MIN_DEPTH = 3;
+    private static final int NULL_MOVE_BASE_REDUCTION = 2;
+
+    private static final int LMR_MIN_DEPTH = 3;
+    /** The first few moves are the ones ordering believes in, and they get searched in full. */
+    private static final int LMR_MIN_MOVES = 3;
+
     private static final int TT_MOVE_SCORE = 3_000_000;
     private static final int GOOD_CAPTURE_BASE = 2_000_000;
     private static final int KILLER_PRIMARY = 1_000_000;
@@ -163,7 +171,7 @@ public final class Search {
         int deepest = Math.min(limits.depth(), MAX_DEPTH);
 
         for (int depth = 1; depth <= deepest; depth++) {
-            int score = negamax(board, depth, 0, -INFINITY, INFINITY);
+            int score = negamax(board, depth, 0, -INFINITY, INFINITY, true);
 
             // An abandoned iteration is discarded whole. It searched the moves it happened to try
             // first and nothing else, so the move on top of it may be worse than what the last
@@ -196,7 +204,11 @@ public final class Search {
         return new SearchResult(bestMove, bestScore, nodes, completedDepth);
     }
 
-    private int negamax(Board board, int depth, int ply, int alpha, int beta) {
+    /**
+     * @param allowNull false directly under a null move, so the search cannot pass twice running and
+     *                  reason its way to a conclusion neither side could reach by playing chess
+     */
+    private int negamax(Board board, int depth, int ply, int alpha, int beta, boolean allowNull) {
         pvLength[ply] = 0;
 
         if (aborted) {
@@ -238,12 +250,45 @@ public final class Search {
             }
         }
 
+        int us = board.sideToMove();
+        boolean inCheck = board.inCheck();
+        // A window of one point means the caller only wants to know which side of it the score falls
+        // on. Guessing wrong there costs a re-search; guessing wrong on a real window corrupts the
+        // move the engine plays, so speculation is confined to the narrow ones.
+        boolean isPv = beta - alpha > 1;
+
+        // Null move pruning: hand the opponent a free move, and if the position is still good enough
+        // to fail high at reduced depth, it was never worth searching properly. Almost any real move
+        // beats doing nothing, so surviving a free move is strong evidence.
+        //
+        // Three guards, each protecting against a way it lies. Not in check, because passing the turn
+        // there is not merely bad but illegal. Not without pieces, because king and pawn endings run
+        // on zugzwang, where being forced to move is the disadvantage and "doing nothing is bad for
+        // me" stops holding. And not twice in a row, or the search reasons about a line neither side
+        // could ever play.
+        if (allowNull && !isPv && !inCheck && depth >= NULL_MOVE_MIN_DEPTH
+                && board.hasNonPawnMaterial(us) && Math.abs(beta) < MATE_THRESHOLD) {
+            int reduction = NULL_MOVE_BASE_REDUCTION + depth / 6;
+            board.makeNullMove();
+            int score = -negamax(board, depth - 1 - reduction, ply + 1, -beta, -beta + 1, false);
+            board.unmakeNullMove();
+
+            if (aborted) {
+                return DRAW;
+            }
+            if (score >= beta) {
+                // Never propagate a mate found beyond a null move: the move that produced it is one
+                // nobody can play, so the mate is not real. Returning beta keeps the cutoff without
+                // claiming a forced win that does not exist.
+                return isMateScore(score) ? beta : score;
+            }
+        }
+
         int originalAlpha = alpha;
         int[] moves = moveLists[ply];
         int count = MoveGenerator.generate(board, moves);
         order(board, moves, orderingScores[ply], count, ply, tableMove);
 
-        int us = board.sideToMove();
         int legalMoves = 0;
         int best = -INFINITY;
         int bestHere = Move.NONE;
@@ -259,8 +304,43 @@ public final class Search {
                 continue;
             }
             legalMoves++;
+            boolean givesCheck = board.inCheck();
 
-            int score = -negamax(board, depth - 1, ply + 1, -beta, -alpha);
+            // Principal variation search. The ordering has already done its work, so the first move
+            // is usually the best one; every move after it is far more likely to be refuted than to
+            // beat it. So they get a scout — a one-point window that asks only "does this beat
+            // alpha?" and answers far faster than a real search — and only a move that says yes is
+            // searched properly.
+            //
+            // This is also what makes reductions possible at all. A null window is the only place
+            // speculation is cheap: guessing wrong costs a re-search, whereas guessing wrong on a
+            // full window would corrupt the score the engine acts on. Null move pruning was measured
+            // at nothing before this existed, because its own guard correctly refused to fire on
+            // wide windows and there were none of any other kind.
+            int score;
+            if (legalMoves == 1) {
+                score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
+            } else {
+                // Late move reduction. If ordering is any good, a quiet move sitting eighth in the
+                // list is not the best move, and searching it to full depth is work spent confirming
+                // something already likely. Search it shallower; if the shallow search is wrong and
+                // the move does beat alpha, the mistake is caught and paid for immediately.
+                //
+                // Captures, promotions, checks and evasions are exempt: those are the moves that
+                // change the position sharply, which is exactly where a missed line hurts.
+                int reduction = reductionFor(depth, legalMoves, isPv, inCheck, givesCheck, move);
+
+                score = -negamax(board, depth - 1 - reduction, ply + 1, -alpha - 1, -alpha, true);
+
+                if (reduction > 0 && score > alpha) {
+                    // The reduction was wrong about this move. Re-scout at full depth before
+                    // committing to a full-window search.
+                    score = -negamax(board, depth - 1, ply + 1, -alpha - 1, -alpha, true);
+                }
+                if (score > alpha && score < beta) {
+                    score = -negamax(board, depth - 1, ply + 1, -beta, -alpha, true);
+                }
+            }
 
             board.unmakeMove(move);
             evaluator.afterUnmakeMove(board, move);
@@ -287,7 +367,7 @@ public final class Search {
             // The mate score carries its distance from the root, so a mate in three outranks a mate
             // in five. Without the ply term every mate looks equally good and the engine can shuffle
             // indefinitely in a won position.
-            return board.inCheck() ? -MATE + ply : DRAW;
+            return inCheck ? -MATE + ply : DRAW;
         }
 
         int bound = best <= originalAlpha ? TranspositionTable.BOUND_UPPER
@@ -388,6 +468,35 @@ public final class Search {
             return -MATE + ply;
         }
         return best;
+    }
+
+    /**
+     * How many plies to shave off a late quiet move.
+     *
+     * <p>Zero for anything sharp — captures, promotions, checks given or received — because those
+     * are the moves where a line missed is a line that loses material or the game. Zero, too, for
+     * the moves ordering ranked highest, which are the ones it has a real opinion about.
+     *
+     * <p>A principal variation node reduces one ply less. The score there is the one the engine will
+     * act on, so speculation is worth less and a mistake costs more.
+     */
+    private static int reductionFor(int depth, int moveNumber, boolean isPv, boolean inCheck,
+                                    boolean givesCheck, int move) {
+        if (depth < LMR_MIN_DEPTH || moveNumber <= LMR_MIN_MOVES
+                || inCheck || givesCheck
+                || Move.isCapture(move) || Move.isPromotion(move)) {
+            return 0;
+        }
+        int reduction = 1;
+        if (depth >= 6 && moveNumber >= 6) {
+            reduction++;
+        }
+        if (isPv) {
+            reduction--;
+        }
+        // Never reduce into quiescence: a move dropped straight to the horizon is not reduced, it is
+        // unexamined.
+        return Math.max(0, Math.min(reduction, depth - 2));
     }
 
     private static int keepTactical(int[] moves, int count) {

@@ -1,6 +1,8 @@
 package io.github.lorenzovicino.ludus.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Random;
 import org.junit.jupiter.api.Test;
@@ -102,6 +104,66 @@ class BoardInvariantTest {
                 board.makeMove(moves[random.nextInt(count)]);
             }
         }
+    }
+
+    @Test
+    void nullMovesAreExactlyReversibleToo() {
+        // The search passes the turn to ask whether a position survives a free move for the
+        // opponent. It does that at a great many nodes, so an unbalanced null move would corrupt the
+        // board just as thoroughly as an unbalanced real one.
+        Random random = new Random(SEED);
+        int[] moves = new int[MoveGenerator.MAX_MOVES];
+
+        for (int game = 0; game < 20; game++) {
+            Board board = Board.startPosition();
+            for (int played = 0; played < 60; played++) {
+                if (!board.inCheck()) {
+                    String before = board.stateSignature();
+                    board.makeNullMove();
+                    assertEquals(board.recomputeZobrist(), board.zobrist(),
+                            "The hash must survive passing the turn");
+                    board.unmakeNullMove();
+                    assertEquals(before, board.stateSignature(),
+                            () -> "Null move not reversed at " + board.toFen());
+                }
+
+                int count = MoveGenerator.filterLegal(board, moves, MoveGenerator.generate(board, moves));
+                if (count == 0) {
+                    break;
+                }
+                board.makeMove(moves[random.nextInt(count)]);
+            }
+        }
+    }
+
+    @Test
+    void aNullMoveClearsTheEnPassantRight() {
+        // The right to capture en passant belonged to the move that is not being made.
+        Board board = Board.startPosition();
+        board.makeMove(Move.of(Squares.parse("e2"), Squares.parse("e4"), Move.DOUBLE_PUSH));
+        assertEquals(Squares.parse("e3"), board.epSquare());
+
+        board.makeNullMove();
+        assertEquals(Squares.NONE, board.epSquare());
+        board.unmakeNullMove();
+        assertEquals(Squares.parse("e3"), board.epSquare(), "And it comes back");
+    }
+
+    @Test
+    void nonPawnMaterialIsDetected() {
+        // The guard that keeps null move pruning out of king and pawn endings, where zugzwang makes
+        // "doing nothing is bad for me" false.
+        Board opening = Board.startPosition();
+        assertTrue(opening.hasNonPawnMaterial(Pieces.WHITE));
+        assertTrue(opening.hasNonPawnMaterial(Pieces.BLACK));
+
+        Board pawnEnding = Board.fromFen("4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1");
+        assertFalse(pawnEnding.hasNonPawnMaterial(Pieces.WHITE));
+        assertFalse(pawnEnding.hasNonPawnMaterial(Pieces.BLACK));
+
+        Board oneKnight = Board.fromFen("4k3/pppppppp/8/8/8/8/PPPPPPPP/4KN2 w - - 0 1");
+        assertTrue(oneKnight.hasNonPawnMaterial(Pieces.WHITE));
+        assertFalse(oneKnight.hasNonPawnMaterial(Pieces.BLACK));
     }
 
     @Test
