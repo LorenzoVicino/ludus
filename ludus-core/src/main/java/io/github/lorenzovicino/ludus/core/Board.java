@@ -242,6 +242,34 @@ public final class Board {
         return isKingAttacked(sideToMove);
     }
 
+    /**
+     * Whether this exact position has occurred earlier on the undo stack.
+     *
+     * <p>Only positions with the same side to move can repeat, so the scan steps back two plies at
+     * a time. It stops at the last pawn move or capture: the halfmove clock counts exactly those,
+     * and anything before one of them is unreachable, so scanning further would be wasted work at
+     * best and a false positive across a cleared history at worst.
+     *
+     * <p>A single earlier occurrence is enough to report here rather than the three the rules
+     * require. That is the conventional choice inside a search — a position the side to move can
+     * already force once can be forced again, so treating the second occurrence as a draw finds the
+     * same outcome a couple of plies earlier.
+     */
+    public boolean isRepetition() {
+        int earliest = Math.max(0, ply - halfmoveClock);
+        for (int i = ply - 2; i >= earliest; i -= 2) {
+            if (undoZobrist[i] == zobrist) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** True once fifty full moves have passed with no capture and no pawn move. */
+    public boolean isFiftyMoveDraw() {
+        return halfmoveClock >= 100;
+    }
+
     public void makeMove(int move) {
         int from = Move.from(move);
         int to = Move.to(move);

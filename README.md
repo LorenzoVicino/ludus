@@ -6,9 +6,13 @@ A UCI chess engine written in Java, built in two acts: first a classical engine 
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
 incrementally updated accumulator — replacing it.
 
-**Status: M0 complete.** Position representation, magic bitboard move generation, Zobrist hashing
-and perft. The full perft suite passes — all 32 published counts across six positions, Kiwipete at
-depth 5 and the initial position at depth 6 included. There is no search yet; that is M1.
+**Status: M1 complete — it plays chess.** The engine speaks UCI, loads into any chess GUI as a
+single jar, and plays legal games. Underneath: magic bitboard move generation validated by the full
+perft suite, alpha-beta search with iterative deepening, and a hand-crafted evaluation behind the
+interface the NNUE will later implement.
+
+No quiescence search yet, so it is tactically weak at the horizon — that is M2, and holding it back
+is what makes M2's Elo measurement mean something.
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
@@ -67,20 +71,48 @@ than a handicap. Some of what the constraint forces:
 | | | Done when |
 |---|---|---|
 | **M0** ✅ | Board, magic bitboards, move generation | The full perft suite passes |
-| **M1** | Search, evaluation, UCI | Plays a complete legal game against a GUI |
-| **M2** | Quiescence, transposition table, move ordering | Beats M1 by SPRT — the Elo baseline |
-| **M3** | Direct legal movegen, pruning, time management | Perft still correct, every patch SPRT-positive |
+| **M1** ✅ | Search, evaluation, UCI | Plays a complete legal game against a GUI |
+| **M2** | Quiescence, transposition table, killers and history | Beats M1 by SPRT — the Elo baseline |
+| **M3** | Direct legal movegen, reductions, time tuning | Perft still correct, every patch SPRT-positive |
 | **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
+| **M6** | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
+
+## Playing against it
+
+`./mvnw package` produces `ludus-uci/target/ludus.jar`, a single self-contained engine. Point any
+UCI host at it:
+
+```
+java -jar ludus-uci/target/ludus.jar
+```
+
+Cute Chess, Arena, En Croissant and BanksiaGUI all take that command as an engine definition. It
+also drives from a terminal, which is the quickest way to see it think:
+
+```
+uci
+position startpos moves e2e4 e7e5 g1f3
+go movetime 1000
+```
+
+Expect the score to swing by roughly a hundred centipawns between odd and even depths. That is the
+horizon effect, and it is the visible cost of having no quiescence search yet — at odd depths the
+engine gets the last capture in an exchange, at even depths its opponent does. M2 fixes it, and the
+size of that fix is the point of measuring it.
 
 ## Building
 
 JDK 24 is the only prerequisite — the Maven wrapper fetches Maven itself.
 
 ```bash
-./mvnw verify          # build and the fast test suite: 60 tests, about 3 seconds
-./mvnw test -Pslow     # the full perft suite: 32 cases, about 15 seconds
+./mvnw verify          # build and the fast suite: 95 tests, about 10 seconds
+./mvnw test -Pslow     # deep perft and a full self-play game: about 16 seconds
 ```
+
+The slow suite is where the two claims above get checked: all 32 published perft counts, and a
+complete self-play game — 157 plies to a fifty-move draw at the time of writing — with every move
+the engine returns verified against the legal move list of the position it was handed.
 
 The split exists so the gating build stays quick. Deep perft counts roughly 600 million nodes, so
 it runs nightly and on demand rather than on every push.

@@ -10,9 +10,17 @@
     <version>0.1.0-SNAPSHOT</version>
   </parent>
 
-  <artifactId>ludus-core</artifactId>
-  <name>ludus-core</name>
+  <artifactId>ludus-eval</artifactId>
+  <name>ludus-eval</name>
   <description>
-    Position representation, magic bitboard move generation, Zobrist hashing, and perft.
+    The Evaluator seam and the hand-crafted evaluation behind it. The NNUE of Act II is a second
+    implementation of the same interface; nothing here knows about it.
   </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-core</artifactId>
+    </dependency>
+  </dependencies>
 </project>

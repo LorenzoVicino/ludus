@@ -273,15 +273,26 @@ public interface Evaluator {
     /** Valutazione in centipawn, dal punto di vista del giocatore di turno. */
     int evaluate(Board board);
 
-    /** Chiamato DOPO che la mossa è stata applicata alla board. */
-    default void onMakeMove(Board board, int move) {}
+    /** Chiamato con la board nella posizione PRE-mossa, prima che la mossa venga applicata. */
+    default void beforeMakeMove(Board board, int move) {}
 
-    /** Chiamato PRIMA che la mossa venga annullata. */
-    default void onUnmakeMove(Board board, int move) {}
+    /** Chiamato con la board tornata alla posizione PRE-mossa, dopo l'annullamento. */
+    default void afterUnmakeMove(Board board, int move) {}
+
+    /** Scarta lo stato incrementale e lo ricostruisce dalla board. */
+    default void reset(Board board) {}
 }
 ```
 
-I due hook `default` sono l'intera partita. `HandCraftedEvaluator` li ignora — non ha stato, calcola tutto da zero a ogni chiamata. `NnueEvaluator` li usa per mantenere il proprio accumulatore incrementale.
+**Scostamento, scoperto implementando.** La prima stesura aveva `onMakeMove` chiamato **dopo** l'applicazione della mossa. Non funziona: a mossa applicata il pezzo catturato **non è più sulla board**, e la sua identità e la sua casa sono esattamente ciò che serve al delta delle feature. Leggere la posizione *prima* rende visibili tutti i pezzi coinvolti — quello che muove, la vittima, la torre dell'arrocco — senza chiedere niente in più alla `Board`.
+
+I nomi sono cambiati di conseguenza: `beforeMakeMove` e `afterUnmakeMove` **portano il contratto addosso**, invece di affidarlo a un commento che qualcuno dovrà ricordare. Entrambi vedono la posizione pre-mossa, quindi la coppia è simmetrica.
+
+`reset` si è aggiunto per una ragione pratica emersa con l'UCI: un host può consegnare al motore una posizione che non ha niente a che vedere con la precedente, e a quel punto un accumulatore incrementale va ricostruito da zero.
+
+Un ultimo dettaglio che l'implementazione ha fissato: la ricerca chiama gli hook attorno a **ogni** mossa che prova, comprese quelle che si rivelano illegali e vengono subito annullate. L'accoppiamento è quindi sempre bilanciato, ed è su questo che si appoggia un'implementazione che fa push e pop di uno stack.
+
+Gli hook `default` sono l'intera partita. `HandCraftedEvaluator` li ignora — non ha stato, calcola tutto da zero a ogni chiamata. `NnueEvaluator` li userà per mantenere il proprio accumulatore incrementale.
 
 Senza questi hook, l'Atto II ti costringerebbe a mettere le mani in `makeMove` e in ogni ramo della ricerca. Con loro, `ludus-uci` cambia una riga:
 
@@ -296,6 +307,12 @@ Sui pattern, con onestà: è **Strategy**, e gli hook hanno un sapore di **Obser
 ### 6.1 HCE — la valutazione a mano
 
 Volutamente modesta, perché è destinata a essere buttata: materiale, tabelle pezzo-casa interpolate tra mediogioco e finale, struttura dei pedoni (doppiati, isolati, passati), mobilità, sicurezza del re, coppia di alfieri.
+
+**Cosa è effettivamente atterrato in M1**, e cosa no. Ci sono materiale, PSQT tapered, struttura dei pedoni e coppia di alfieri. **Mobilità e sicurezza del re non ci sono**, ed è coerente con il paragrafo qui sotto: sono i due termini più costosi da scrivere e da tarare, e su materiale destinato al cestino non valgono il prezzo.
+
+Una semplificazione ulteriore, dichiarata: solo **pedone e re** hanno due tabelle distinte per mediogioco e finale. Cavalli, alfieri, torri e donne ne condividono una sola tra le due fasi, perché le loro case migliori cambiano poco — mentre per il pedone e per il re la fase cambia davvero la risposta, ed è lì che l'interpolazione serve. Inventare un secondo set di numeri non tarati avrebbe aggiunto codice senza aggiungere informazione.
+
+Il test che tiene tutto questo insieme è la **simmetria di colore**: specchiare una posizione — ribaltare le traverse, scambiare i colori, passare la mossa — deve dare lo stesso punteggio. È una sola proprietà e cattura i due errori più facili da fare e più difficili da notare: un segno invertito in un termine, e una tabella pezzo-casa indicizzata senza mirroring per il nero. Entrambi lasciano il motore silenziosamente convinto che un colore stia meglio.
 
 **Non spendere settimane a fare tuning di HCE.** Serve a due cose: dare all'Atto I un avversario onesto e stabilire il *baseline Elo* contro cui misurerai la NNUE. Se la ottimizzi troppo, l'unico effetto è rendere meno impressionante il numero dell'Atto II.
 
@@ -419,17 +436,39 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 | # | Contenuto | Fatto quando |
 |---|---|---|
 | **M0** ✅ | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
-| **M1** | Negamax, HCE minima, UCI | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
-| **M2** | Quiescence, TT, move ordering, iterative deepening | Batte M1 con SPRT. Questo è il **baseline Elo** |
-| **M3** | Movegen legale diretta, potature, time management | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
+| **M1** ✅ | Negamax, HCE minima, UCI, iterative deepening, time management, ordinamento catture | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
+| **M2** | Quiescence, TT, killer e history, potature | Batte M1 con SPRT. Questo è il **baseline Elo** |
+| **M3** | Movegen legale diretta, riduzioni, tuning del tempo | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
 | **M4** | Inferenza NNUE, prima rete allenata | Invariante accumulatore verde, Java≈PyTorch, **SPRT vs M3 positivo** |
 | **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
+| **M6** | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
 
 **M0 e M1 sono un weekend a testa.** M2 è dove il motore inizia a essere forte. M4 è il momento in cui hai il numero da mettere nel README, e da lì M5 può durare quanto ti diverte.
 
 **M0 è chiuso.** Tutti i 32 casi della suite perft passano, i due invarianti della board (make/unmake reversibile, zobrist incrementale contro ricalcolato) sono verdi su partite casuali con seed fisso, e le tabelle magic sono validate contro il ray walking. 60 test in 3 secondi per il gate veloce, 32 casi perft profondi in 14 secondi per il nightly.
 
+**M1 è chiuso.** Il motore parla UCI, viene lanciato come un jar singolo da una GUI, e gioca partite legali. 95 test verdi.
+
+Due cose sono migrate da M2 a M1, e vale la pena dire perché. **L'iterative deepening** perché il time management dell'UCI lo richiede: senza, non c'è modo di rispettare `go wtime` — ti fermi a profondità fissa e sfori il tempo o lo butti. E **l'ordinamento delle catture**, perché alpha-beta senza ordinamento pota così poco che confrontare M2 contro un M1 non ordinato misurerebbe l'ordinamento invece di tutto il resto.
+
+**La quiescence invece è rimasta fuori, deliberatamente**, e non è pigrizia: il criterio di uscita di M2 è battere M1 con SPRT, e quel numero è una misura vera solo se M1 esiste prima senza. Il costo è visibile a occhio nudo nell'output UCI — il punteggio oscilla di circa ±100 centipawn tra profondità pari e dispari, perché a profondità dispari l'ultima cattura la fa il motore e a profondità pari l'avversario. È l'*horizon effect* in forma pura, ed è la prima cosa che M2 sistema.
+
 La cosa importante di questa scaletta: **M1 è già un repo pubblicabile**. Un motore che gioca partite legali con UCI e CI verde è un progetto finito, non un cantiere. Tutto il resto è miglioramento incrementale su una base che si difende da sola. È l'assicurazione contro il repo abbandonato a metà.
+
+### 9.1 M6 — la pagina di stato
+
+Ultimo step, e per struttura: raccoglie i numeri che i milestone precedenti producono, quindi prima devono esistere.
+
+L'idea è una pagina che si legge da sola per capire come sta andando il motore — Elo per milestone, nps, esito della suite perft, storico delle patch e degli SPRT — generata dai workflow e aggiornata senza intervento manuale.
+
+**Il vincolo che ne determina la forma:** i README di GitHub **sanificano l'HTML**. Niente `<iframe>`, niente `<script>`, niente CSS. Quindi "attaccare una pagina HTML al profilo" non è letteralmente possibile, e il modo che funziona è a due pezzi:
+
+1. **La pagina piena su GitHub Pages**, servita dal repo `ludus`. Qui l'HTML è libero: grafici dell'Elo nel tempo, tabelle perft, cronologia degli SPRT.
+2. **Una card SVG nel profilo**, generata dallo stesso workflow e committata su `LorenzoVicino/LorenzoVicino`, con un link alla pagina. L'SVG passa la sanificazione perché è un'immagine — è esattamente il meccanismo che il profilo già usa per `languages-light.svg`.
+
+Sul tema: scacchiera. La griglia 8×8 è già un sistema di layout, i colori delle case danno la palette, e la notazione algebrica dà le etichette degli assi — quindi il tema non è decorazione applicata sopra, è la struttura stessa dei dati.
+
+Un'accortezza che vale la pena fissare adesso: la card SVG va generata in **due varianti**, chiara e scura, e referenziata nel README con `<picture>` e `prefers-color-scheme`. Il profilo lo fa già per le lingue; una card che si legge solo in tema chiaro è mezza rotta.
 
 ---
 

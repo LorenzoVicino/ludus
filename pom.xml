@@ -39,16 +39,15 @@
 
   <!--
     Modules arrive as milestones need them; the full planned graph is in DESIGN.md §2.1.
-    Adding them empty ahead of time would only be noise.
 
-      ludus-eval    Evaluator interface + hand-crafted evaluation   M1
-      ludus-search  alpha-beta, transposition table, ordering       M1/M2
-      ludus-uci     UCI protocol and entry point                    M1
-      ludus-nnue    NNUE implementation of Evaluator                M4
-      ludus-tools   perft runner, benchmarks, dataset generator     M2+
+      ludus-nnue   NNUE implementation of Evaluator            M4
+      ludus-tools  perft runner, benchmarks, dataset generator  M2+
   -->
   <modules>
     <module>ludus-core</module>
+    <module>ludus-eval</module>
+    <module>ludus-search</module>
+    <module>ludus-uci</module>
   </modules>
 
   <properties>
@@ -56,15 +55,16 @@
     <maven.compiler.release>24</maven.compiler.release>
 
     <!--
-      A JUnit Platform tag expression. The default keeps the deep perft runs out of an ordinary
-      `mvn test` so it stays fast enough to run on every push (DESIGN.md §8.3); `-Pslow` inverts
-      it, and `-Dtest.tags=...` overrides it for anything else.
+      A JUnit Platform tag expression. The default keeps the slow runs — deep perft, long self-play
+      games — out of an ordinary `mvn test` so it stays fast enough to gate every push
+      (DESIGN.md §8.3); `-Pslow` inverts it, and `-Dtest.tags=...` overrides it for anything else.
     -->
     <test.tags>!slow</test.tags>
 
     <junit.version>6.1.3</junit.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+    <maven-shade-plugin.version>3.6.2</maven-shade-plugin.version>
   </properties>
 
   <dependencyManagement>
@@ -76,8 +76,33 @@
         <type>pom</type>
         <scope>import</scope>
       </dependency>
+
+      <dependency>
+        <groupId>io.github.lorenzovicino</groupId>
+        <artifactId>ludus-core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.lorenzovicino</groupId>
+        <artifactId>ludus-eval</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.github.lorenzovicino</groupId>
+        <artifactId>ludus-search</artifactId>
+        <version>${project.version}</version>
+      </dependency>
     </dependencies>
   </dependencyManagement>
+
+  <!-- Every module tests with JUnit; declaring it once here beats repeating it four times. -->
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
 
   <build>
     <pluginManagement>
@@ -96,13 +121,25 @@
             <argLine>-Xmx2g</argLine>
           </configuration>
         </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-shade-plugin</artifactId>
+          <version>${maven-shade-plugin.version}</version>
+        </plugin>
       </plugins>
     </pluginManagement>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+      </plugin>
+    </plugins>
   </build>
 
   <profiles>
     <profile>
-      <!-- mvn test -Pslow — the full perft suite, deep entries included. Minutes, not seconds. -->
+      <!-- mvn test -Pslow — deep perft and the long self-play games. Minutes, not seconds. -->
       <id>slow</id>
       <properties>
         <test.tags>slow</test.tags>
