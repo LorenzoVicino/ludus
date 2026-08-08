@@ -4,30 +4,44 @@ import io.github.lorenzovicino.ludus.core.Board;
 import io.github.lorenzovicino.ludus.core.Move;
 import io.github.lorenzovicino.ludus.core.MoveGenerator;
 import io.github.lorenzovicino.ludus.core.Pieces;
+import io.github.lorenzovicino.ludus.core.Squares;
+import io.github.lorenzovicino.ludus.core.StaticExchange;
 import io.github.lorenzovicino.ludus.eval.Evaluator;
 import java.util.Arrays;
 
 /**
- * Negamax with alpha-beta, driven by iterative deepening.
+ * Negamax with alpha-beta, iterative deepening, a transposition table, and a quiescence search.
  *
- * <h2>What is deliberately absent</h2>
+ * <h2>What is here and why</h2>
  *
- * <p>No quiescence search, no transposition table, no killers or history, no pruning or reductions.
- * All of that is M2, and holding it back is the point rather than an oversight: M2's exit criterion
- * is beating this version by SPRT, which is only a real measurement if this version exists first.
- * The engine is consequently tactically blind at the horizon — it will happily walk into a
- * recapture one ply beyond where it stopped looking. Known, deliberate, and the first thing M2
- * fixes.
+ * <p><strong>Quiescence search.</strong> The single largest gain of the milestone. Stopping the
+ * search at a fixed depth means judging a position mid-exchange: the engine sees itself win a queen
+ * and never sees the recapture one ply later. Quiescence keeps following captures until the position
+ * is quiet, which removes the illusion. When the side to move is in check it searches every reply
+ * instead, because a side in check has no option to stand still.
  *
- * <p>Capture ordering is here, though, because alpha-beta without it barely prunes: the same
- * position that reaches depth 6 with good ordering reaches depth 4 without, and comparing an
- * unordered search against an ordered one would measure the ordering rather than everything else.
+ * <p><strong>Transposition table.</strong> The same position is reached by many move orders, and a
+ * table turns the second visit into a lookup. It also supplies the previous iteration's best move,
+ * which is the most valuable ordering hint available.
+ *
+ * <p><strong>Killers and history.</strong> Quiet moves have no material to sort them by. A move that
+ * caused a cutoff at the same ply elsewhere in the tree usually does so again, and a move that has
+ * caused cutoffs anywhere is a better guess than one that never has.
+ *
+ * <p><strong>Static exchange evaluation.</strong> Splits captures into those worth searching and
+ * those that lose material. Losing captures sort behind quiet moves, and quiescence declines them
+ * outright.
+ *
+ * <h2>What is still absent</h2>
+ *
+ * <p>No null-move pruning, no late move reductions, no futility pruning. Those are M3, one patch at
+ * a time with its own measurement, because each of them can hide a bug that only loses games in rare
+ * positions.
  *
  * <h2>Threading</h2>
  *
- * <p>Single-threaded, and one instance runs one search at a time — it owns preallocated buffers and
- * mutates the board it is given. {@link #requestStop()} is the exception, and is safe to call from
- * another thread.
+ * <p>Single-threaded; one instance runs one search at a time. {@link #requestStop()} is the only
+ * method safe to call from elsewhere.
  */
 public final class Search {
 
@@ -45,19 +59,26 @@ public final class Search {
     /** Nodes between clock reads. A power of two so the test is a mask, not a division. */
     private static final int TIME_CHECK_INTERVAL = 4096;
 
-    /** Ordering values only. The king's entry exists so it never sorts as a cheap victim. */
-    private static final int[] EXCHANGE_VALUE = {100, 320, 330, 500, 950, 20_000};
-
-    private static final int CAPTURE_BONUS = 100_000;
-    private static final int PROMOTION_BONUS = 10_000;
+    private static final int TT_MOVE_SCORE = 3_000_000;
+    private static final int GOOD_CAPTURE_BASE = 2_000_000;
+    private static final int KILLER_PRIMARY = 1_000_000;
+    private static final int KILLER_SECONDARY = 900_000;
+    private static final int BAD_CAPTURE_BASE = -2_000_000;
+    /** Kept below {@link #KILLER_SECONDARY} so a well-tried quiet move never outranks a killer. */
+    private static final int HISTORY_MAX = 500_000;
 
     private final Evaluator evaluator;
+    private final StaticExchange exchange = new StaticExchange();
+    private TranspositionTable table = new TranspositionTable();
 
-    // One buffer per ply, allocated once. The search must not allocate — see DESIGN.md §3.3.
+    // Preallocated, one per ply. The search must not allocate — see DESIGN.md §3.3.
     private final int[][] moveLists = new int[MAX_DEPTH + 2][MoveGenerator.MAX_MOVES];
     private final int[][] orderingScores = new int[MAX_DEPTH + 2][MoveGenerator.MAX_MOVES];
     private final int[][] principalVariation = new int[MAX_DEPTH + 2][MAX_DEPTH + 2];
     private final int[] pvLength = new int[MAX_DEPTH + 2];
+    private final int[][] killers = new int[MAX_DEPTH + 2][2];
+    private final int[][][] history =
+            new int[Pieces.COLOR_COUNT][Squares.COUNT][Squares.COUNT];
 
     private SearchListener listener = SearchListener.NONE;
     private long nodes;
@@ -71,6 +92,24 @@ public final class Search {
 
     public void setListener(SearchListener listener) {
         this.listener = listener == null ? SearchListener.NONE : listener;
+    }
+
+    /** Resizes the transposition table, discarding its contents. */
+    public void setHashSize(int megabytes) {
+        table.resize(megabytes);
+    }
+
+    /** Forgets everything learned from the previous game. */
+    public void newGame() {
+        table.clear();
+        for (int[][] byFrom : history) {
+            for (int[] row : byFrom) {
+                Arrays.fill(row, 0);
+            }
+        }
+        for (int[] pair : killers) {
+            Arrays.fill(pair, Move.NONE);
+        }
     }
 
     /** Asks the running search to stop as soon as it notices. Safe from any thread. */
@@ -100,6 +139,15 @@ public final class Search {
         nodes = 0;
         aborted = false;
         evaluator.reset(board);
+        table.newSearch();
+
+        // Killers are per-ply guesses about this tree, so they start empty. History is a longer-run
+        // statistic and is halved instead: what worked last move usually still helps, but it should
+        // not outweigh what this search discovers.
+        for (int[] pair : killers) {
+            Arrays.fill(pair, Move.NONE);
+        }
+        decayHistory();
 
         long start = System.nanoTime();
         hardDeadline = limits.hardNanos() == SearchLimits.UNLIMITED
@@ -155,8 +203,9 @@ public final class Search {
             return DRAW;
         }
 
-        // A repeated position or an exhausted fifty-move counter is a draw whatever the pieces are
-        // worth. Not tested at the root, where the host asked for a move rather than a verdict.
+        // Checked before the table, deliberately. A draw by repetition depends on the path taken,
+        // and the table stores positions without their history, so asking it first could report a
+        // winning score for a position that is actually a draw right now.
         if (ply > 0 && (board.isRepetition() || board.isFiftyMoveDraw())) {
             return DRAW;
         }
@@ -168,16 +217,36 @@ public final class Search {
         }
 
         if (depth <= 0) {
-            return evaluator.evaluate(board);
+            return quiescence(board, ply, alpha, beta);
         }
 
+        long key = board.zobrist();
+        long entry = table.probe(key);
+        int tableMove = Move.NONE;
+        if (entry != 0) {
+            tableMove = TranspositionTable.moveOf(entry);
+            // No cutoff at the root: the host asked for a move, and a cutoff returns a score
+            // without setting one.
+            if (ply > 0 && TranspositionTable.depthOf(entry) >= depth) {
+                int tableScore = TranspositionTable.scoreOf(entry, ply);
+                int bound = TranspositionTable.boundOf(entry);
+                if (bound == TranspositionTable.BOUND_EXACT
+                        || (bound == TranspositionTable.BOUND_LOWER && tableScore >= beta)
+                        || (bound == TranspositionTable.BOUND_UPPER && tableScore <= alpha)) {
+                    return tableScore;
+                }
+            }
+        }
+
+        int originalAlpha = alpha;
         int[] moves = moveLists[ply];
         int count = MoveGenerator.generate(board, moves);
-        order(board, moves, orderingScores[ply], count);
+        order(board, moves, orderingScores[ply], count, ply, tableMove);
 
         int us = board.sideToMove();
         int legalMoves = 0;
         int best = -INFINITY;
+        int bestHere = Move.NONE;
 
         for (int i = 0; i < count; i++) {
             int move = moves[i];
@@ -202,10 +271,12 @@ public final class Search {
 
             if (score > best) {
                 best = score;
+                bestHere = move;
                 if (score > alpha) {
                     alpha = score;
                     recordPv(ply, move);
                     if (alpha >= beta) {
+                        rememberCutoff(us, move, ply, depth);
                         break;
                     }
                 }
@@ -218,23 +289,130 @@ public final class Search {
             // indefinitely in a won position.
             return board.inCheck() ? -MATE + ply : DRAW;
         }
+
+        int bound = best <= originalAlpha ? TranspositionTable.BOUND_UPPER
+                : best >= beta ? TranspositionTable.BOUND_LOWER
+                : TranspositionTable.BOUND_EXACT;
+        table.store(key, bestHere, best, depth, bound, ply);
         return best;
     }
 
     /**
-     * Sorts captures and promotions ahead of quiet moves — most valuable victim first, cheapest
-     * attacker among equal victims.
+     * Searches on past the nominal depth until nothing is left to capture.
+     *
+     * <p>Without this the engine evaluates positions in the middle of an exchange and believes
+     * whatever the half-finished trade suggests. It is the difference between an engine that can be
+     * beaten by a two-move combination and one that cannot.
+     */
+    private int quiescence(Board board, int ply, int alpha, int beta) {
+        if (aborted) {
+            return DRAW;
+        }
+        nodes++;
+        if ((nodes & (TIME_CHECK_INTERVAL - 1)) == 0 && isOutOfTime()) {
+            aborted = true;
+            return DRAW;
+        }
+        if (ply >= MAX_DEPTH) {
+            return evaluator.evaluate(board);
+        }
+
+        boolean inCheck = board.inCheck();
+        int best;
+        if (inCheck) {
+            // Standing pat is not available when in check: doing nothing is not a legal option, so
+            // the static score would describe a position that cannot occur.
+            best = -INFINITY;
+        } else {
+            best = evaluator.evaluate(board);
+            if (best >= beta) {
+                return best;
+            }
+            if (best > alpha) {
+                alpha = best;
+            }
+        }
+
+        int[] moves = moveLists[ply];
+        int count = MoveGenerator.generate(board, moves);
+        if (!inCheck) {
+            count = keepTactical(moves, count);
+        }
+        order(board, moves, orderingScores[ply], count, ply, Move.NONE);
+
+        int us = board.sideToMove();
+        int legalMoves = 0;
+
+        for (int i = 0; i < count; i++) {
+            int move = moves[i];
+
+            // A capture that loses material cannot improve the score of a quiet position, and
+            // searching it invites an endless chain of bad trades. Evasions are exempt: when in
+            // check even a losing capture may be the only legal move.
+            if (!inCheck && exchange.evaluate(board, move) < 0) {
+                continue;
+            }
+
+            evaluator.beforeMakeMove(board, move);
+            board.makeMove(move);
+            if (board.isKingAttacked(us)) {
+                board.unmakeMove(move);
+                evaluator.afterUnmakeMove(board, move);
+                continue;
+            }
+            legalMoves++;
+
+            int score = -quiescence(board, ply + 1, -beta, -alpha);
+
+            board.unmakeMove(move);
+            evaluator.afterUnmakeMove(board, move);
+
+            if (aborted) {
+                return DRAW;
+            }
+
+            if (score > best) {
+                best = score;
+                if (score > alpha) {
+                    alpha = score;
+                    if (alpha >= beta) {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Mate found while chasing captures. Only reachable in the in-check branch, since otherwise
+        // quiet moves were filtered out and an empty list means nothing to capture, not no moves.
+        if (inCheck && legalMoves == 0) {
+            return -MATE + ply;
+        }
+        return best;
+    }
+
+    private static int keepTactical(int[] moves, int count) {
+        int kept = 0;
+        for (int i = 0; i < count; i++) {
+            if (Move.isCapture(moves[i]) || Move.isPromotion(moves[i])) {
+                moves[kept++] = moves[i];
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * Sorts the move list best-guess first.
      *
      * <p>Ordering earns more than almost any other single change: alpha-beta visits roughly the
      * square root of the tree when the best move comes first, and close to all of it when the best
      * move comes last.
      */
-    private static void order(Board board, int[] moves, int[] scores, int count) {
+    private void order(Board board, int[] moves, int[] scores, int count, int ply, int tableMove) {
         for (int i = 0; i < count; i++) {
-            scores[i] = orderingScore(board, moves[i]);
+            scores[i] = orderingScore(board, moves[i], ply, tableMove);
         }
-        // Insertion sort: the lists are short, mostly quiet moves scoring zero, and this allocates
-        // nothing and has the smallest constant of anything that would work here.
+        // Insertion sort: the lists are short, and this allocates nothing and has the smallest
+        // constant of anything that would work here.
         for (int i = 1; i < count; i++) {
             int move = moves[i];
             int score = scores[i];
@@ -249,21 +427,51 @@ public final class Search {
         }
     }
 
-    private static int orderingScore(Board board, int move) {
-        int score = 0;
-        if (Move.isPromotion(move)) {
-            score += PROMOTION_BONUS + EXCHANGE_VALUE[Move.promotionType(move)];
+    private int orderingScore(Board board, int move, int ply, int tableMove) {
+        if (move != Move.NONE && move == tableMove) {
+            return TT_MOVE_SCORE;
         }
-        if (Move.isCapture(move)) {
-            // En passant takes a pawn that is not on the destination square, so the victim cannot be
-            // read off the board there.
-            int victim = Move.isEnPassant(move)
-                    ? Pieces.PAWN
-                    : Pieces.typeOf(board.pieceAt(Move.to(move)));
-            int attacker = Pieces.typeOf(board.pieceAt(Move.from(move)));
-            score += CAPTURE_BONUS + EXCHANGE_VALUE[victim] * 8 - EXCHANGE_VALUE[attacker];
+        if (Move.isCapture(move) || Move.isPromotion(move)) {
+            int value = exchange.evaluate(board, move);
+            return (value >= 0 ? GOOD_CAPTURE_BASE : BAD_CAPTURE_BASE) + value;
         }
-        return score;
+        if (move == killers[ply][0]) {
+            return KILLER_PRIMARY;
+        }
+        if (move == killers[ply][1]) {
+            return KILLER_SECONDARY;
+        }
+        return history[board.sideToMove()][Move.from(move)][Move.to(move)];
+    }
+
+    /**
+     * Records that a quiet move produced a cutoff.
+     *
+     * <p>Captures are excluded because material already sorts them; spending the tables on them
+     * would drown out the only signal quiet moves have. The history bonus grows with the square of
+     * the depth, so a cutoff near the root — where it saved far more work — counts for more.
+     */
+    private void rememberCutoff(int color, int move, int ply, int depth) {
+        if (Move.isCapture(move) || Move.isPromotion(move)) {
+            return;
+        }
+        if (killers[ply][0] != move) {
+            killers[ply][1] = killers[ply][0];
+            killers[ply][0] = move;
+        }
+        int[] row = history[color][Move.from(move)];
+        int to = Move.to(move);
+        row[to] = Math.min(HISTORY_MAX, row[to] + depth * depth);
+    }
+
+    private void decayHistory() {
+        for (int[][] byFrom : history) {
+            for (int[] row : byFrom) {
+                for (int i = 0; i < row.length; i++) {
+                    row[i] >>= 1;
+                }
+            }
+        }
     }
 
     private void recordPv(int ply, int move) {

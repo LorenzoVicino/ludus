@@ -4,6 +4,9 @@ target/
 bin/
 out/
 
+# Scratch space for match runs: engine jars under test, opening books, PGNs
+build/
+
 # Maven wrapper keeps its properties file; nothing else under .mvn is ours
 .mvn/.develocity/
 .mvn/.gradle-enterprise/

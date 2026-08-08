@@ -1,6 +1,7 @@
 package io.github.lorenzovicino.ludus.search;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.lorenzovicino.ludus.core.Board;
@@ -123,6 +124,79 @@ class SearchTest {
         assertTrue(result.hasMove(), "A timed search still has to produce a move");
         assertTrue(elapsedMillis < 3_000,
                 () -> "A 300 ms budget overran badly: " + elapsedMillis + " ms");
+    }
+
+    @Test
+    void quiescenceSeesTheRecaptureAtDepthOne() {
+        // Qxd5 wins a pawn and loses a queen to cxd5. A fixed-depth search stopping after one ply
+        // evaluates the position mid-exchange and takes it happily; quiescence keeps following
+        // captures until the position is quiet, which is what makes the recapture visible.
+        //
+        // If this test ever fails, quiescence has stopped working — nothing else in the engine
+        // prevents this blunder.
+        Board board = Board.fromFen("4k3/8/2p5/3p4/8/8/8/3QK3 w - - 0 1");
+        SearchResult result = newSearch().search(board, SearchLimits.depth(1));
+
+        assertNotEquals("d1d5", Move.toUci(result.bestMove()),
+                "Qxd5 loses a queen for a pawn");
+        assertTrue(result.score() > -400,
+                () -> "The engine should not believe it is losing here, got " + result.score());
+    }
+
+    @Test
+    void takesTheDefendedPieceWhenTheTradeIsGood() {
+        // The mirror image of the test above: quiescence must not make the engine timid. Rxd5 wins a
+        // knight for a rook against a pawn recapture, which is close to level and far better than
+        // the alternatives here.
+        Board board = Board.fromFen("4k3/8/2p5/3n4/8/8/8/3RK3 w - - 0 1");
+        SearchResult result = newSearch().search(board, SearchLimits.depth(4));
+        assertTrue(isLegal(board, result.bestMove()));
+        assertTrue(result.score() > -200,
+                () -> "A sound capture should not read as a disaster, got " + result.score());
+    }
+
+    @Test
+    void aWarmTranspositionTableAgreesWithItselfAndCostsLess() {
+        // Searching the same position twice with the same instance is the cheapest check that the
+        // table stores and returns what it should: a corrupted entry changes the verdict. The node
+        // count is the functional half — if the second search is no cheaper, the table is not being
+        // consulted at all.
+        Board board = Board.fromFen("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10");
+        Search search = newSearch();
+
+        SearchResult first = search.search(board, SearchLimits.depth(5));
+        SearchResult second = search.search(board, SearchLimits.depth(5));
+
+        assertEquals(Move.toUci(first.bestMove()), Move.toUci(second.bestMove()));
+        assertEquals(first.score(), second.score());
+        assertTrue(second.nodes() < first.nodes(),
+                () -> "A warm table should shrink the search: " + first.nodes()
+                        + " then " + second.nodes());
+    }
+
+    @Test
+    void newGameForgetsThePreviousOne() {
+        Board board = Board.fromFen("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10");
+        Search search = newSearch();
+        search.search(board, SearchLimits.depth(5));
+
+        search.newGame();
+        SearchResult afterReset = search.search(board, SearchLimits.depth(5));
+
+        assertTrue(afterReset.hasMove());
+        assertTrue(isLegal(board, afterReset.bestMove()));
+    }
+
+    @Test
+    void resizingTheHashKeepsTheEngineWorking() {
+        Search search = newSearch();
+        search.setHashSize(1);
+        SearchResult small = search.search(Board.startPosition(), SearchLimits.depth(4));
+        search.setHashSize(128);
+        SearchResult large = search.search(Board.startPosition(), SearchLimits.depth(4));
+
+        assertTrue(small.hasMove());
+        assertTrue(large.hasMove());
     }
 
     private static boolean isLegal(Board board, int move) {

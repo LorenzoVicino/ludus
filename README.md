@@ -6,13 +6,18 @@ A UCI chess engine written in Java, built in two acts: first a classical engine 
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
 incrementally updated accumulator — replacing it.
 
-**Status: M1 complete — it plays chess.** The engine speaks UCI, loads into any chess GUI as a
-single jar, and plays legal games. Underneath: magic bitboard move generation validated by the full
-perft suite, alpha-beta search with iterative deepening, and a hand-crafted evaluation behind the
-interface the NNUE will later implement.
+**Status: M2 complete — and it has a number.**
 
-No quiescence search yet, so it is tactically weak at the horizon — that is M2, and holding it back
-is what makes M2's Elo measurement mean something.
+> **+552 ± 106 Elo** over M1, from 186 wins, 12 draws and 2 losses across 200 games.
+> The SPRT crossed its bound at game 11; no illegal move was played.
+
+The engine speaks UCI, loads into any chess GUI as a single jar, and now searches properly:
+quiescence, a transposition table, killer moves, a history heuristic, and static exchange
+evaluation ordering the captures. Move generation is magic bitboard based and validated by the full
+perft suite.
+
+Still to come in M3: null-move pruning, late move reductions, futility pruning — one patch at a
+time, each with its own SPRT, because each can hide a bug that only loses games in rare positions.
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
@@ -47,6 +52,23 @@ counts at the root point at the branch containing it. It is a debugger, not just
 match against the previous version under a sequential probability ratio test; if the test does
 not pass, the patch does not land. One patch at a time, so a regression is always attributable.
 
+The match runner lives in `ludus-tools` rather than being an external program, and reports its
+verdict as an exit code — 0 accepted, 1 rejected, 2 inconclusive — so CI can gate a patch on the
+result instead of on somebody reading the output:
+
+```bash
+java -jar ludus-tools/target/ludus-match.jar \
+    --engine-a "java -jar build/candidate.jar" \
+    --engine-b "java -jar build/baseline.jar" \
+    --book build/openings.epd \
+    --pairs 100 --movetime 100 --concurrency 8 --sprt 0 10
+```
+
+It plays every opening twice with the colours swapped, since otherwise a match measures the
+opening book as much as the engines. Time is a fixed allowance per move rather than a running
+clock: that separates what the search does with the time it gets from how well a version divides
+a clock, which are different questions.
+
 A third invariant guards Act II: the incrementally updated accumulator must be bit-for-bit
 identical to a full recomputation, verified by property tests over random games. A bug there
 does not crash anything — it just quietly makes the engine play worse.
@@ -72,8 +94,8 @@ than a handicap. Some of what the constraint forces:
 |---|---|---|
 | **M0** ✅ | Board, magic bitboards, move generation | The full perft suite passes |
 | **M1** ✅ | Search, evaluation, UCI | Plays a complete legal game against a GUI |
-| **M2** | Quiescence, transposition table, killers and history | Beats M1 by SPRT — the Elo baseline |
-| **M3** | Direct legal movegen, reductions, time tuning | Perft still correct, every patch SPRT-positive |
+| **M2** ✅ | Quiescence, transposition table, killers, history, SEE | Beats M1 by SPRT — the Elo baseline |
+| **M3** | Null move, late move reductions, futility, direct legal movegen | Perft still correct, every patch SPRT-positive |
 | **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
 | **M6** | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
@@ -96,10 +118,18 @@ position startpos moves e2e4 e7e5 g1f3
 go movetime 1000
 ```
 
-Expect the score to swing by roughly a hundred centipawns between odd and even depths. That is the
-horizon effect, and it is the visible cost of having no quiescence search yet — at odd depths the
-engine gets the last capture in an exchange, at even depths its opponent does. M2 fixes it, and the
-size of that fix is the point of measuring it.
+The score should now stay reasonably steady as the depth climbs. It did not before M2, and the
+difference is the clearest thing quiescence buys — on the same position after `e2e4 e7e5 g1f3 b8c6
+f1b5`:
+
+```
+M1:  depth 1  cp  25    depth 2  cp -140    depth 3  cp  50
+M2:  depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
+```
+
+Swings of ±165 centipawns became ±30. Without quiescence the engine judges positions in the middle
+of an exchange: at odd depths it gets the last capture, at even depths its opponent does, and the
+evaluation lurches accordingly. Following captures to a quiet position removes the illusion.
 
 ## Building
 

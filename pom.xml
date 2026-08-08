@@ -40,14 +40,14 @@
   <!--
     Modules arrive as milestones need them; the full planned graph is in DESIGN.md §2.1.
 
-      ludus-nnue   NNUE implementation of Evaluator            M4
-      ludus-tools  perft runner, benchmarks, dataset generator  M2+
+      ludus-nnue   NNUE implementation of Evaluator   M4
   -->
   <modules>
     <module>ludus-core</module>
     <module>ludus-eval</module>
     <module>ludus-search</module>
     <module>ludus-uci</module>
+    <module>ludus-tools</module>
   </modules>
 
   <properties>

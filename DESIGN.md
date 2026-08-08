@@ -52,14 +52,25 @@ Le FEN delle posizioni 3–6 e di Kiwipete stanno su CPW alla pagina "Perft Resu
 
 ### 1.2 Elo — l'oracolo di forza
 
-Nessun cambiamento alla ricerca o alla valutazione entra senza un match. Strumento: **fastchess** (o `cutechess-cli`).
+Nessun cambiamento alla ricerca o alla valutazione entra senza un match.
 
-- Time control corto e fisso: `10+0.1` o `8+0.08`.
-- Avversario: la versione precedente di `ludus` stessa.
-- Aperture da un book `.epd` bilanciato, colori invertiti a coppie.
-- **SPRT** con `elo0=0, elo1=5, alpha=beta=0.05`: si ferma da solo quando ha una risposta, invece di farti giocare 20 000 partite inutili.
+- Avversario: la versione precedente di `ludus` stessa, come jar separato.
+- Aperture da un book `.epd` bilanciato, **colori invertiti a coppie** — senza questo un match misura il book quanto i motori, perché una posizione che favorisce leggermente il bianco regala punti a chi ha pescato il bianco più spesso.
+- **SPRT** con `elo0=0, elo1=10, alpha=beta=0.05`: si ferma da solo quando ha una risposta, invece di farti giocare 20 000 partite inutili.
 
 Regola dura: *se l'SPRT non passa, la patch non entra*, per quanto elegante sia il codice. È la disciplina che separa un motore che migliora da uno che si gonfia.
+
+**Scostamento sullo strumento.** Il piano diceva **fastchess** (o `cutechess-cli`). Il match runner è invece dentro il repo, in `ludus-tools`, per due ragioni — una accidentale e una che vale a prescindere.
+
+Quella accidentale: sulla macchina di sviluppo **Norton mette in quarantena `fastchess.exe`**. È un eseguibile non firmato, scaricato, che genera sottoprocessi: la protezione comportamentale l'ha rimosso dal disco a metà del primo match. Ha fatto lo stesso con un jar del motore copiato nella directory temporanea. Non è un problema da aggirare disattivando l'antivirus di qualcun altro.
+
+Quella che vale a prescindere: un harness **dentro il repo è usabile dalla CI**. Da M3 in poi ogni patch deve passare un SPRT, e un gate che dipende da un binario esterno da scaricare è un gate fragile. Il runner espone il verdetto come **exit code** — 0 accettata, 1 respinta, 2 inconcludente — che è esattamente ciò che serve a un workflow per bloccare una patch senza che nessuno legga l'output.
+
+Il costo è avere scritto la statistica a mano, ed è lì che vanno i test: `SprtTest` e `EloEstimateTest` verificano i punti di ancoraggio noti della scala Elo (400 punti = dieci a uno), che il rapporto di verosimiglianza abbia il segno giusto, che un match di quattro partite non decida nulla, e che una varianza nulla non venga letta come evidenza infinita.
+
+Sul time control: il runner usa un **tempo fisso per mossa** invece di un orologio che scorre. È una scelta, non una scorciatoia: isola *cosa fa la ricerca col tempo che ha* da *quanto bene una versione divide l'orologio*. Sono due domande diverse e un orologio vero le misurerebbe insieme. Il time management si valuta separatamente, a M3.
+
+Sull'LLR: è la forma con approssimazione normale, con la varianza presa dalla ripartizione vittorie/patte/sconfitte **osservata** invece che assunta. Serve perché quella ripartizione è molto diversa tra due motori distanti cento Elo e due distanti cinque, e assumerla renderebbe il test troppo ottimista proprio nel caso in cui serve prudenza.
 
 ### 1.3 nps — l'oracolo di performance
 
@@ -437,8 +448,8 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 |---|---|---|
 | **M0** ✅ | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
 | **M1** ✅ | Negamax, HCE minima, UCI, iterative deepening, time management, ordinamento catture | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
-| **M2** | Quiescence, TT, killer e history, potature | Batte M1 con SPRT. Questo è il **baseline Elo** |
-| **M3** | Movegen legale diretta, riduzioni, tuning del tempo | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
+| **M2** ✅ | Quiescence, TT, killer e history, SEE | Batte M1 con SPRT. Questo è il **baseline Elo** |
+| **M3** | Null move, LMR, futility, movegen legale diretta | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
 | **M4** | Inferenza NNUE, prima rete allenata | Invariante accumulatore verde, Java≈PyTorch, **SPRT vs M3 positivo** |
 | **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
 | **M6** | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
@@ -454,6 +465,31 @@ Due cose sono migrate da M2 a M1, e vale la pena dire perché. **L'iterative dee
 **La quiescence invece è rimasta fuori, deliberatamente**, e non è pigrizia: il criterio di uscita di M2 è battere M1 con SPRT, e quel numero è una misura vera solo se M1 esiste prima senza. Il costo è visibile a occhio nudo nell'output UCI — il punteggio oscilla di circa ±100 centipawn tra profondità pari e dispari, perché a profondità dispari l'ultima cattura la fa il motore e a profondità pari l'avversario. È l'*horizon effect* in forma pura, ed è la prima cosa che M2 sistema.
 
 La cosa importante di questa scaletta: **M1 è già un repo pubblicabile**. Un motore che gioca partite legali con UCI e CI verde è un progetto finito, non un cantiere. Tutto il resto è miglioramento incrementale su una base che si difende da sola. È l'assicurazione contro il repo abbandonato a metà.
+
+**M2 è chiuso, ed è il primo milestone con un numero vero.**
+
+| | |
+|---|---|
+| Risultato | **186 vittorie, 12 patte, 2 sconfitte** su 200 partite — 96,0% |
+| Elo | **+552 ± 106** contro M1 |
+| SPRT | bound superato alla **partita 11** (11-0-0), LLR finale +55,7 su bound ±2,94 |
+| Condizioni | 100 aperture giocate a colori invertiti, 100 ms per mossa, hash 64 MB |
+| Mosse illegali | **zero** |
+
+L'intervallo è largo perché a punteggi estremi l'Elo è intrinsecamente imprecisa: a 96% ogni singola partita in più sposta poco la stima. Il numero da leggere non è "552" ma "il limite inferiore dell'intervallo è +446", che è comunque enorme.
+
+Cosa lo ha prodotto, in ordine di peso plausibile: la **quiescence** (la maggior parte), poi la **transposition table** — che oltre a evitare di ricercare trasposizioni fornisce la mossa migliore dell'iterazione precedente, cioè il miglior suggerimento di ordinamento esistente — poi **killer, history e SEE** sull'ordinamento. Non ho separato i contributi con SPRT individuali: sarebbe stato l'approccio corretto e non l'ho fatto, quindi la ripartizione sopra è un'ipotesi ragionata, non una misura. Da M3 in poi la regola "una patch per volta con il suo SPRT" va applicata davvero, ed è lì che serve.
+
+L'effetto della quiescence si vede anche senza match, nell'output UCI sulla stessa posizione:
+
+```
+M1:  depth 1  cp  25    depth 2  cp -140    depth 3  cp  50
+M2:  depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
+```
+
+Oscillazioni da ±165 centipawn a ±30. È esattamente l'*horizon effect* che §5.2 prevedeva, misurato prima e dopo.
+
+**Cosa è slittato a M3:** null move pruning, late move reductions, futility pruning. La tabella diceva "potature" in M2; ci sono la potatura SEE in quiescence e i tagli dell'ordinamento, ma le tre potature vere no. Ognuna può nascondere un bug che perde partite solo in posizioni rare — lo zugzwang per il null move — e vanno introdotte una per volta con il proprio SPRT. Ammucchiarle qui avrebbe reso impossibile attribuire un'eventuale regressione.
 
 ### 9.1 M6 — la pagina di stato
 

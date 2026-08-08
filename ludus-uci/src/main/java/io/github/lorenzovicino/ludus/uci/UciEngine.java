@@ -14,6 +14,7 @@ import io.github.lorenzovicino.ludus.search.SearchLimits;
 import io.github.lorenzovicino.ludus.search.SearchResult;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -32,8 +33,9 @@ import java.util.function.Consumer;
  */
 public final class UciEngine implements Runnable {
 
-    private static final String NAME = "ludus 0.1.0";
+    private static final String NAME = "ludus 0.2.0";
     private static final String AUTHOR = "Lorenzo Vicino";
+    private static final int DEFAULT_HASH_MB = 64;
 
     /** UCI's null move, the answer when a position has no legal move at all. */
     private static final String NO_MOVE = "0000";
@@ -89,10 +91,16 @@ public final class UciEngine implements Runnable {
             // Answered straight away, even mid-search: the protocol uses this as a liveness probe
             // and a host is entitled to an immediate reply.
             case "isready" -> send("readyok");
-            case "setoption" -> { /* No options yet. Accepting and ignoring is protocol-legal. */ }
+            case "setoption" -> {
+                awaitSearch();
+                setOption(tokens);
+            }
             case "ucinewgame" -> {
                 awaitSearch();
                 board = Board.startPosition();
+                // The table and the history tables describe the game just finished. Carrying them
+                // into an unrelated one is worse than starting empty.
+                search.newGame();
             }
             case "position" -> {
                 awaitSearch();
@@ -118,7 +126,39 @@ public final class UciEngine implements Runnable {
     private void identify() {
         send("id name " + NAME);
         send("id author " + AUTHOR);
+        send("option name Hash type spin default " + DEFAULT_HASH_MB + " min 1 max 1024");
         send("uciok");
+    }
+
+    /**
+     * Handles {@code setoption name <id> value <x>}.
+     *
+     * <p>The option name can contain spaces, so everything between {@code name} and {@code value} is
+     * the identifier. Unknown options are ignored rather than refused: a host is free to offer
+     * options an engine has never heard of.
+     */
+    private void setOption(String[] tokens) {
+        int nameStart = -1;
+        int valueStart = -1;
+        for (int i = 1; i < tokens.length; i++) {
+            if (tokens[i].equals("name")) {
+                nameStart = i + 1;
+            } else if (tokens[i].equals("value")) {
+                valueStart = i + 1;
+                break;
+            }
+        }
+        if (nameStart < 0 || valueStart < 0 || valueStart >= tokens.length) {
+            return;
+        }
+        String name = String.join(" ", Arrays.copyOfRange(tokens, nameStart, valueStart - 1));
+        if (!name.equalsIgnoreCase("Hash")) {
+            return;
+        }
+        long megabytes = numberAfter(tokens, valueStart, DEFAULT_HASH_MB);
+        int clamped = (int) Math.max(1, Math.min(megabytes, 1024));
+        search.setHashSize(clamped);
+        send("info string hash set to " + clamped + " MB");
     }
 
     private void setPosition(String[] tokens) {
