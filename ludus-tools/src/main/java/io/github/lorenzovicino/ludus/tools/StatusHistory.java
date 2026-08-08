@@ -19,8 +19,8 @@ final class StatusHistory {
     }
 
     static final String ENGINE = "ludus";
-    static final String VERSION = "0.2.0";
-    static final String CURRENT_MILESTONE = "M2";
+    static final String VERSION = "0.3.0";
+    static final String CURRENT_MILESTONE = "M3";
 
     /**
      * @param moveTimeMillis fixed allowance per move — see the match runner on why a fixed time
@@ -47,7 +47,7 @@ final class StatusHistory {
      * point a chart would be decoration, and a chart earns its place once M3 adds a second.
      */
     static final MatchResult LATEST_MATCH = new MatchResult(
-            "M1", "M2", 552.1, 106.4, 186, 12, 2, 55.68, 11, 100);
+            "M2", "M3", 181.7, 39.5, 195, 54, 51, 6.82, 85, 100);
 
     static final List<Milestone> MILESTONES = List.of(
             new Milestone("M0",
@@ -65,9 +65,10 @@ final class StatusHistory {
                     "Beats M1 by SPRT. This is the Elo baseline the network gets measured against.",
                     true),
             new Milestone("M3",
-                    "Null move, late move reductions, futility, direct legal movegen",
-                    "Perft still correct, and every patch SPRT-positive on its own.",
-                    false),
+                    "Principal variation search, null move, late move reductions",
+                    "Perft still correct, and every patch SPRT-positive on its own. Null move was "
+                            + "measured and rejected before PVS made it able to fire at all.",
+                    true),
             new Milestone("M4",
                     "NNUE inference, first trained network",
                     "Accumulator matches a full recomputation bit for bit, Java inference matches "

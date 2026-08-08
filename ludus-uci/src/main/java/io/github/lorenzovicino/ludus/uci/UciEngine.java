@@ -33,7 +33,7 @@ import java.util.function.Consumer;
  */
 public final class UciEngine implements Runnable {
 
-    private static final String NAME = "ludus 0.2.0";
+    private static final String NAME = "ludus 0.3.0";
     private static final String AUTHOR = "Lorenzo Vicino";
     private static final int DEFAULT_HASH_MB = 64;
 

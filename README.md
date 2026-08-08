@@ -10,18 +10,20 @@ A UCI chess engine written in Java, built in two acts: first a classical engine 
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
 incrementally updated accumulator — replacing it.
 
-**Status: M2 complete — and it has a number.**
+**Status: M3 complete.**
 
-> **+552 ± 106 Elo** over M1, from 186 wins, 12 draws and 2 losses across 200 games.
-> The SPRT crossed its bound at game 11; no illegal move was played.
+> **+182 ± 40 Elo** over M2, from 195 wins, 54 draws and 51 losses across 300 games.
+> The SPRT crossed its bound at game 85.
 
-The engine speaks UCI, loads into any chess GUI as a single jar, and now searches properly:
-quiescence, a transposition table, killer moves, a history heuristic, and static exchange
-evaluation ordering the captures. Move generation is magic bitboard based and validated by the full
-perft suite.
+The engine speaks UCI, loads into any chess GUI as a single jar, and searches with quiescence, a
+transposition table, killers and history, principal variation search, null move pruning and late
+move reductions. Move generation is magic bitboard based and validated by the full perft suite.
 
-Still to come in M3: null-move pruning, late move reductions, futility pruning — one patch at a
-time, each with its own SPRT, because each can hide a bug that only loses games in rare positions.
+M3 was three patches and three separate SPRT matches, and **the first one was rejected** — which is
+the whole reason for measuring them one at a time. Null move pruning came out at −16 ± 36 Elo,
+because it was inert: its guard correctly refused to fire on wide search windows, and the engine had
+no narrow ones until principal variation search created them. Shipped without measurement, it would
+have been a feature that did nothing. The full account is in [`DESIGN.md`](DESIGN.md) §9.0.
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 

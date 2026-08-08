@@ -61,14 +61,19 @@ class StatusOutputTest {
 
     @Test
     void bothCardsCarryTheHeadlineNumbers() {
+        // Derived from the history rather than written out, so a new milestone updates one place
+        // instead of breaking a test that was only ever asserting last month's numbers.
         StatusHistory.MatchResult match = StatusHistory.LATEST_MATCH;
+        String split = match.wins() + "-" + match.draws() + "-" + match.losses();
+
         for (SvgCard.Palette palette : List.of(SvgCard.LIGHT, SvgCard.DARK)) {
             String svg = SvgCard.render(palette, match, 138, true);
             assertTrue(svg.startsWith("<svg "), "Must be an SVG document");
             assertTrue(svg.endsWith("</svg>"));
             assertTrue(svg.contains("ludus"));
             assertTrue(svg.contains("Elo"), () -> "The headline is the Elo figure: " + svg);
-            assertTrue(svg.contains("186-12-2"), "The raw split belongs on the card");
+            assertTrue(svg.contains(split), () -> "The raw split belongs on the card: " + svg);
+            assertTrue(svg.contains(match.candidate() + " over " + match.baseline()));
             assertTrue(svg.contains("138 tests green"));
             assertTrue(svg.contains("perft verified"));
         }
@@ -91,7 +96,8 @@ class StatusOutputTest {
         try {
             Locale.setDefault(Locale.ITALY);
             String svg = SvgCard.render(SvgCard.LIGHT, StatusHistory.LATEST_MATCH, 138, true);
-            assertTrue(!svg.contains("552,"), () -> "Locale leaked into the card: " + svg);
+            assertTrue(!svg.matches("(?s).*\\d,\\d.*"),
+                    () -> "A decimal comma means the locale leaked into the card: " + svg);
         } finally {
             Locale.setDefault(original);
         }
