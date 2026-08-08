@@ -7,6 +7,12 @@ out/
 # Scratch space for match runs: engine jars under test, opening books, PGNs
 build/
 
+# The status page is generated on every run and served from the Pages artifact, so committing it
+# would add a timestamp-only diff every night for no benefit. The SVG cards next to it *are*
+# committed: a profile README in another repository references them by URL.
+docs/index.html
+docs/status.json
+
 # Maven wrapper keeps its properties file; nothing else under .mvn is ours
 .mvn/.develocity/
 .mvn/.gradle-enterprise/

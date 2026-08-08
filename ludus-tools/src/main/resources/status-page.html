@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ludus — engine status</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Build status, measured Elo and perft results for ludus, a UCI chess engine in Java.">
+<style>
+  /* ------------------------------------------------------------------------
+     Palette. The light set is complete on bare :root so the un-stamped
+     "system" state resolves; dark redefines only tokens, once behind
+     prefers-color-scheme and once behind the explicit stamp, so a toggle wins
+     in both directions.
+
+     The neutrals carry a slight indigo bias rather than being flat grey, and
+     the accent is the ochre that analysis interfaces use for an advantage —
+     the subject's own vocabulary rather than a decorative pop.
+     --------------------------------------------------------------------- */
+  :root {
+    --ground: #f1f3f7;
+    --panel: #ffffff;
+    --panel-alt: #e6eaf1;
+    --ink: #171b23;
+    --ink-soft: #59626f;
+    --rule: #d1d7e0;
+    --accent: #a2660f;
+    --accent-wash: #f3e6cd;
+    --good: #2a7548;
+    --bad: #a33030;
+
+    --sq-light: #e2e6ee;
+    --sq-dark: #98a4b4;
+    --piece-white: #fcfdff;
+    --piece-black: #1d212a;
+    --piece-edge: #39404e;
+
+    --bar-white: #fbfcfe;
+    --bar-black: #2a303b;
+
+    --shadow: 0 1px 2px rgb(23 27 35 / 8%), 0 8px 24px -12px rgb(23 27 35 / 14%);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0f1116;
+      --panel: #181b22;
+      --panel-alt: #13161c;
+      --ink: #e6e9f0;
+      --ink-soft: #949eae;
+      --rule: #262b35;
+      --accent: #dda344;
+      --accent-wash: #352c17;
+      --good: #4bae7c;
+      --bad: #e06a6a;
+
+      --sq-light: #3a414d;
+      --sq-dark: #242a34;
+      --piece-white: #f1f4f8;
+      --piece-black: #0b0d11;
+      --piece-edge: #05070a;
+
+      --bar-white: #e6e9f0;
+      --bar-black: #313846;
+
+      --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0f1116;
+    --panel: #181b22;
+    --panel-alt: #13161c;
+    --ink: #e6e9f0;
+    --ink-soft: #949eae;
+    --rule: #262b35;
+    --accent: #dda344;
+    --accent-wash: #352c17;
+    --good: #4bae7c;
+    --bad: #e06a6a;
+
+    --sq-light: #3a414d;
+    --sq-dark: #242a34;
+    --piece-white: #f1f4f8;
+    --piece-black: #0b0d11;
+    --piece-edge: #05070a;
+
+    --bar-white: #e6e9f0;
+    --bar-black: #313846;
+
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
+  }
+
+  :root {
+    --sans: ui-sans-serif, system-ui, "Segoe UI Variable Text", "Segoe UI", Roboto,
+            "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono", Consolas, Menlo, monospace;
+    --measure: 68ch;
+    --gap: 1.5rem;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    /* Explicit, from a token: the viewer paints its own ground behind the page, and a
+       transparent body would borrow the host's theme instead of ours. */
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .page {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1rem, 3vw, 2rem) 4rem;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(2rem, 5vw, 3.25rem);
+  }
+
+  h1, h2, h3 { text-wrap: balance; margin: 0; }
+
+  h1 {
+    font-size: clamp(2.1rem, 6vw, 3rem);
+    font-weight: 680;
+    letter-spacing: -0.025em;
+    line-height: 1.05;
+  }
+
+  h2 {
+    font-size: 0.775rem;
+    font-weight: 620;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  h3 { font-size: 1rem; font-weight: 620; letter-spacing: -0.005em; }
+
+  p { margin: 0; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, .square:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---- masthead ------------------------------------------------------- */
+
+  .masthead { display: flex; flex-direction: column; gap: 0.85rem; }
+
+  .lede {
+    max-width: var(--measure);
+    color: var(--ink-soft);
+    font-size: 1.05rem;
+  }
+
+  .stamp {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem 1.25rem;
+    padding-top: 0.35rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+  .stamp b { color: var(--ink); font-weight: 550; }
+
+  /* ---- section frame -------------------------------------------------- */
+
+  section { display: flex; flex-direction: column; gap: 1rem; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    box-shadow: var(--shadow);
+  }
+
+  /* ---- the headline result -------------------------------------------- */
+
+  .result { padding: clamp(1.25rem, 3vw, 2rem); display: flex; flex-direction: column; gap: 1.35rem; }
+
+  .result-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: last baseline;
+    gap: 0.5rem 1rem;
+  }
+
+  .elo {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(2.6rem, 9vw, 4.25rem);
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    line-height: 0.9;
+    color: var(--accent);
+  }
+  .elo-unit { font-size: 1rem; font-weight: 500; color: var(--ink-soft); letter-spacing: 0; }
+  .versus { font-size: 0.95rem; color: var(--ink-soft); }
+
+  /* The evaluation bar an analysis board draws: the score split, not a progress meter. */
+  .evalbar { display: flex; flex-direction: column; gap: 0.5rem; }
+  .evalbar-track {
+    display: flex;
+    height: 1.6rem;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+    background: var(--bar-black);
+  }
+  .evalbar-white { background: var(--bar-white); }
+  .evalbar-draw {
+    background: repeating-linear-gradient(135deg,
+        var(--bar-white) 0 4px, var(--sq-dark) 4px 8px);
+  }
+  .evalbar-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1.1rem;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+  }
+  .evalbar-legend b { color: var(--ink); font-weight: 550; }
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .fact { background: var(--panel); padding: 0.7rem 0.85rem; }
+  .fact dt {
+    font-size: 0.68rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+  .fact dd {
+    margin: 0.15rem 0 0;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.05rem;
+    font-weight: 550;
+  }
+
+  /* ---- milestone ladder ----------------------------------------------- */
+
+  /* Numbered because the content genuinely is a sequence: each milestone's exit criterion
+     depends on the previous one holding. A scoresheet numbers moves for the same reason. */
+  .ladder { list-style: none; margin: 0; padding: 0; }
+
+  .step {
+    display: grid;
+    grid-template-columns: 3.25rem 1fr auto;
+    gap: 0.35rem 1rem;
+    align-items: baseline;
+    padding: 0.9rem clamp(0.85rem, 2vw, 1.25rem);
+    border-bottom: 1px solid var(--rule);
+  }
+  .step:last-child { border-bottom: 0; }
+  /* Alternating surfaces: the light and dark squares of a board, used as the layout rhythm. */
+  .step:nth-child(even) { background: var(--panel-alt); }
+
+  .step-id {
+    font-family: var(--mono);
+    font-weight: 620;
+    font-size: 0.95rem;
+    color: var(--accent);
+  }
+  .step[data-state="todo"] .step-id { color: var(--ink-soft); }
+  .step-title { font-weight: 560; }
+  .step-criterion {
+    grid-column: 2;
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    max-width: var(--measure);
+  }
+
+  .state {
+    justify-self: end;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.5rem;
+    border-radius: 2px;
+    border: 1px solid currentcolor;
+    white-space: nowrap;
+  }
+  .state[data-state="done"] { color: var(--good); }
+  .state[data-state="todo"] { color: var(--ink-soft); }
+
+  /* ---- perft grid ----------------------------------------------------- */
+
+  .positions {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+    gap: var(--gap);
+  }
+
+  .position { padding: 1rem; display: flex; flex-direction: column; gap: 0.8rem; }
+
+  .position-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+
+  /* A real board from the position's own FEN. Content, not ornament: it is what the
+     numbers beside it were counted from. */
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    aspect-ratio: 1;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    overflow: hidden;
+    /* Unicode chess glyphs come from the system font; sizing by container keeps them
+       proportional at any card width. */
+    font-size: clamp(0.8rem, 3.2cqw, 1.4rem);
+    container-type: inline-size;
+  }
+  .square {
+    display: grid;
+    place-items: center;
+    aspect-ratio: 1;
+    line-height: 1;
+    user-select: none;
+  }
+  .square[data-shade="light"] { background: var(--sq-light); }
+  .square[data-shade="dark"] { background: var(--sq-dark); }
+  /* Both colours use the solid glyph and are separated by fill, because the outlined
+     "white" glyphs disappear against a light square. */
+  .piece-w { color: var(--piece-white); text-shadow: 0 0 1px var(--piece-edge); }
+  .piece-b { color: var(--piece-black); }
+
+  .depths { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 0.78rem; }
+  .depths th {
+    text-align: right;
+    font-weight: 550;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--rule);
+  }
+  .depths th:first-child, .depths td:first-child { text-align: left; }
+  .depths td { text-align: right; padding: 0.2rem 0; font-variant-numeric: tabular-nums; }
+  .depths tr + tr td { border-top: 1px solid color-mix(in srgb, var(--rule) 55%, transparent); }
+  .scroll { overflow-x: auto; }
+
+  .verdict {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--good);
+  }
+  .verdict[data-ok="false"] { color: var(--bad); }
+
+  /* ---- footer --------------------------------------------------------- */
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.25rem;
+    color: var(--ink-soft);
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header class="masthead">
+    <h1>ludus</h1>
+    <p class="lede">
+      A UCI chess engine in Java, built in two acts: a classical engine with a hand-crafted
+      evaluation, then an NNUE replacing it. This page is written by the build, not by hand.
+    </p>
+    <div class="stamp" id="stamp"></div>
+  </header>
+
+  <section>
+    <h2>Strength, measured</h2>
+    <div class="panel result" id="result"></div>
+  </section>
+
+  <section>
+    <h2>Milestones</h2>
+    <ol class="panel ladder" id="ladder"></ol>
+  </section>
+
+  <section>
+    <h2>Perft — the correctness oracle</h2>
+    <p class="lede">
+      Published node counts for standard positions. A mismatch is proof of a move generation bug
+      rather than a hint, which makes this a debugger and not just a test. Every count below was
+      recomputed on this run.
+    </p>
+    <div class="positions" id="positions"></div>
+  </section>
+
+  <footer>
+    <p id="footer-line"></p>
+    <p>
+      <a href="https://github.com/LorenzoVicino/ludus">github.com/LorenzoVicino/ludus</a>
+    </p>
+  </footer>
+</div>
+
+<script>
+  const STATUS = __STATUS_JSON__;
+
+  const SOLID = { p: "♟", n: "♞", b: "♝", r: "♜", q: "♛", k: "♚" };
+
+  const groupDigits = (n) => n.toLocaleString("en-US");
+  const millions = (n) => (n / 1e6).toFixed(1) + " M";
+  const signed = (n, digits = 0) => (n >= 0 ? "+" : "−") + Math.abs(n).toFixed(digits);
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  /* ---- masthead -------------------------------------------------------- */
+
+  function renderStamp() {
+    const bits = [
+      ["version", STATUS.version],
+      ["milestone", STATUS.milestone],
+      ["commit", STATUS.commit],
+      ["tests", groupDigits(STATUS.tests) + " green"],
+      ["updated", STATUS.generated],
+    ];
+    const stamp = document.getElementById("stamp");
+    for (const [label, value] of bits) {
+      const span = el("span");
+      span.append(label + " ", el("b", null, value));
+      stamp.append(span);
+    }
+  }
+
+  /* ---- the headline result --------------------------------------------- */
+
+  function renderResult() {
+    const host = document.getElementById("result");
+    const elo = STATUS.elo;
+
+    if (!elo) {
+      host.append(el("p", "lede", "No match has been measured yet."));
+      return;
+    }
+
+    const head = el("div", "result-head");
+    const figure = el("div", "elo");
+    figure.append(signed(elo.value, 0));
+    figure.append(el("span", "elo-unit", " ± " + elo.margin.toFixed(0) + " Elo"));
+    head.append(figure);
+    head.append(el("p", "versus", elo.to + " against " + elo.from));
+    host.append(head);
+
+    // The split an analysis board shows: white's share, the drawn middle, black's share.
+    const games = elo.wins + elo.draws + elo.losses;
+    const track = el("div", "evalbar-track");
+    track.setAttribute("role", "img");
+    track.setAttribute("aria-label",
+      elo.to + " scored " + elo.percent.toFixed(1) + " percent: " +
+      elo.wins + " wins, " + elo.draws + " draws, " + elo.losses + " losses");
+    for (const [cls, count] of [
+      ["evalbar-white", elo.wins],
+      ["evalbar-draw", elo.draws],
+      ["", elo.losses],
+    ]) {
+      if (count === 0) continue;
+      const part = el("div", cls);
+      part.style.flex = String(count / games);
+      track.append(part);
+    }
+
+    const legend = el("div", "evalbar-legend");
+    for (const [label, value] of [
+      ["won", elo.wins], ["drawn", elo.draws], ["lost", elo.losses],
+    ]) {
+      const span = el("span");
+      span.append(el("b", null, String(value)), " " + label);
+      legend.append(span);
+    }
+    const share = el("span");
+    share.append(el("b", null, elo.percent.toFixed(1) + "%"), " score");
+    legend.append(share);
+
+    const bar = el("div", "evalbar");
+    bar.append(track, legend);
+    host.append(bar);
+
+    host.append(facts([
+      ["games", groupDigits(games)],
+      ["LLR", signed(elo.llr, 1)],
+      ["SPRT bound crossed", "game " + elo.sprtCrossedAt],
+      ["move time", elo.moveTimeMillis + " ms"],
+      ["nodes/second", millions(STATUS.perftNps.max)],
+    ]));
+  }
+
+  function facts(entries) {
+    const list = el("dl", "facts");
+    for (const [label, value] of entries) {
+      const cell = el("div", "fact");
+      cell.append(el("dt", null, label), el("dd", null, value));
+      list.append(cell);
+    }
+    return list;
+  }
+
+  /* ---- milestones ------------------------------------------------------ */
+
+  function renderLadder() {
+    const host = document.getElementById("ladder");
+    for (const step of STATUS.milestones) {
+      const item = el("li", "step");
+      item.dataset.state = step.state;
+      item.append(el("span", "step-id", step.id));
+      item.append(el("span", "step-title", step.title));
+      const badge = el("span", "state", step.state === "done" ? "done" : "planned");
+      badge.dataset.state = step.state;
+      item.append(badge);
+      item.append(el("p", "step-criterion", step.criterion));
+      host.append(item);
+    }
+  }
+
+  /* ---- perft ----------------------------------------------------------- */
+
+  function renderPositions() {
+    const host = document.getElementById("positions");
+    for (const position of STATUS.perft) {
+      const card = el("div", "panel position");
+
+      const head = el("div", "position-head");
+      head.append(el("h3", null, position.name));
+      const ok = position.cases.every((c) => c.matched);
+      const verdict = el("span", "verdict", ok ? "verified" : "MISMATCH");
+      verdict.dataset.ok = String(ok);
+      head.append(verdict);
+      card.append(head);
+
+      card.append(renderBoard(position.fen));
+
+      const scroll = el("div", "scroll");
+      scroll.append(renderDepths(position.cases));
+      card.append(scroll);
+
+      host.append(card);
+    }
+  }
+
+  function renderBoard(fen) {
+    const board = el("div", "board");
+    board.setAttribute("role", "img");
+    board.setAttribute("aria-label", "Position " + fen.split(" ")[0]);
+    const ranks = fen.split(" ")[0].split("/");
+
+    ranks.forEach((rank, row) => {
+      let file = 0;
+      for (const ch of rank) {
+        if (ch >= "1" && ch <= "8") {
+          for (let i = 0; i < Number(ch); i++) board.append(square(row, file++, null));
+        } else {
+          board.append(square(row, file++, ch));
+        }
+      }
+    });
+    return board;
+  }
+
+  function square(row, file, piece) {
+    const cell = el("div", "square");
+    cell.dataset.shade = (row + file) % 2 === 0 ? "light" : "dark";
+    if (piece) {
+      const glyph = el("span", piece === piece.toUpperCase() ? "piece-w" : "piece-b",
+        SOLID[piece.toLowerCase()]);
+      cell.append(glyph);
+    }
+    return cell;
+  }
+
+  function renderDepths(cases) {
+    const table = el("table", "depths");
+    const head = table.insertRow();
+    for (const label of ["depth", "nodes", "nodes/s"]) {
+      const th = document.createElement("th");
+      th.textContent = label;
+      th.scope = "col";
+      head.append(th);
+    }
+    const body = table.createTBody();
+    // Only the deepest few: the shallow counts are covered by the same run and add rows
+    // without adding information.
+    for (const item of cases.slice(-3)) {
+      const row = body.insertRow();
+      row.insertCell().textContent = String(item.depth);
+      row.insertCell().textContent = groupDigits(item.nodes);
+      row.insertCell().textContent = item.nps > 0 ? millions(item.nps) : "—";
+    }
+    return table;
+  }
+
+  function renderFooter() {
+    document.getElementById("footer-line").textContent =
+      "Regenerated by the status workflow on every push to main and nightly. "
+      + "Perft recomputed each run: " + groupDigits(STATUS.perftTotalNodes)
+      + " nodes in " + (STATUS.perftMillis / 1000).toFixed(1) + " s.";
+  }
+
+  renderStamp();
+  renderResult();
+  renderLadder();
+  renderPositions();
+  renderFooter();
+</script>
+
+</body>
+</html>

@@ -29,8 +29,14 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>
+        <!--
+          Two entry points, two jars. One shaded jar can only declare one Main-Class, and
+          `java -jar` is a friendlier interface than `java -cp … fully.qualified.Main` for a tool
+          that gets invoked from a workflow file.
+        -->
         <executions>
           <execution>
+            <id>match-runner</id>
             <phase>package</phase>
             <goals>
               <goal>shade</goal>
@@ -42,6 +48,23 @@
                 <transformer
                     implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>io.github.lorenzovicino.ludus.tools.MatchMain</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+          <execution>
+            <id>status-generator</id>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <finalName>ludus-status</finalName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <transformers>
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>io.github.lorenzovicino.ludus.tools.StatusMain</mainClass>
                 </transformer>
               </transformers>
             </configuration>

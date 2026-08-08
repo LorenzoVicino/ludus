@@ -1,0 +1,82 @@
+name: Status page
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # Nightly, so the perft timings and the "updated" stamp stay current even on quiet days.
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two deployments at once, and a newer push supersedes an older one still in flight.
+  group: status-page
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    name: Generate
+    runs-on: ubuntu-latest
+    permissions:
+      # Only to commit the regenerated profile cards back to the repository.
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '24'
+          cache: maven
+
+      # `clean` matters here rather than being tidiness: the generator counts tests by reading the
+      # surefire reports, and reports left over from an earlier run — a deep perft run, say — would
+      # be counted again and inflate the figure.
+      - name: Build and test
+        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+
+      - name: Generate the page and cards
+        run: |
+          java -jar ludus-tools/target/ludus-status.jar \
+            --out docs \
+            --root . \
+            --commit "${{ github.sha }}"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
+
+      - name: Upload the page
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
+        with:
+          path: docs
+
+      # The page itself is served from the artifact above and is not committed. The SVG cards are,
+      # because a profile README in another repository has to reference them by URL. They only change
+      # when a number changes, so this produces no nightly churn.
+      - name: Commit the cards if they changed
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7
+        with:
+          file_pattern: docs/card-light.svg docs/card-dark.svg
+          commit_message: "Update status cards [skip ci]"
+          commit_user_name: github-actions[bot]
+          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+
+  deploy:
+    name: Deploy
+    needs: generate
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5

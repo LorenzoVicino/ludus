@@ -5,6 +5,10 @@
 # at all: it sends you hunting a bug that does not exist, or blesses one that does. Re-check
 # against the source before editing a number.
 #
+# This lives in main resources rather than test resources because two consumers need it: the perft
+# tests, and the status page generator, which reports these positions and renders their boards.
+# Duplicating the counts into a second file is exactly the mistake the comment above warns about.
+#
 # Format:  name;FEN;depth:nodes;depth:nodes;...
 #
 # Note that the Kiwipete FEN below carries no halfmove clock or move number. That is how it is
