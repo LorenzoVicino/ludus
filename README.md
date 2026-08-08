@@ -1,6 +1,10 @@
 # ludus
 
 [![CI](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml/badge.svg)](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml)
+[![Status page](https://github.com/LorenzoVicino/ludus/actions/workflows/status.yml/badge.svg)](https://lorenzovicino.github.io/ludus/)
+
+**[Live status → lorenzovicino.github.io/ludus](https://lorenzovicino.github.io/ludus/)** — measured
+Elo, the milestone ladder, and every perft position recomputed on each run. Written by the build.
 
 A UCI chess engine written in Java, built in two acts: first a classical engine with a
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
@@ -98,7 +102,7 @@ than a handicap. Some of what the constraint forces:
 | **M3** | Null move, late move reductions, futility, direct legal movegen | Perft still correct, every patch SPRT-positive |
 | **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
-| **M6** | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
+| **M6** ✅ | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
 
 ## Playing against it
 

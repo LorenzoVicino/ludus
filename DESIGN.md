@@ -452,7 +452,7 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 | **M3** | Null move, LMR, futility, movegen legale diretta | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
 | **M4** | Inferenza NNUE, prima rete allenata | Invariante accumulatore verde, Java≈PyTorch, **SPRT vs M3 positivo** |
 | **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
-| **M6** | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
+| **M6** ✅ | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
 
 **M0 e M1 sono un weekend a testa.** M2 è dove il motore inizia a essere forte. M4 è il momento in cui hai il numero da mettere nel README, e da lì M5 può durare quanto ti diverte.
 
