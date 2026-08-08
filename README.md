@@ -1,5 +1,7 @@
 # ludus
 
+[![CI](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml/badge.svg)](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml)
+
 A UCI chess engine written in Java, built in two acts: first a classical engine with a
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
 incrementally updated accumulator — replacing it.
