@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.github.lorenzovicino</groupId>
+  <artifactId>ludus</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>ludus</name>
+  <description>
+    A UCI chess engine in Java, in two acts: classical search with a hand-crafted evaluation,
+    then an NNUE with an incrementally updated accumulator.
+  </description>
+  <url>https://github.com/LorenzoVicino/ludus</url>
+
+  <licenses>
+    <license>
+      <name>MIT License</name>
+      <url>https://opensource.org/licenses/MIT</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <developers>
+    <developer>
+      <id>LorenzoVicino</id>
+      <name>Lorenzo Vicino</name>
+      <url>https://github.com/LorenzoVicino</url>
+    </developer>
+  </developers>
+
+  <scm>
+    <connection>scm:git:https://github.com/LorenzoVicino/ludus.git</connection>
+    <url>https://github.com/LorenzoVicino/ludus</url>
+  </scm>
+
+  <!--
+    Modules arrive as milestones need them; the full planned graph is in DESIGN.md §2.1.
+    Adding them empty ahead of time would only be noise.
+
+      ludus-eval    Evaluator interface + hand-crafted evaluation   M1
+      ludus-search  alpha-beta, transposition table, ordering       M1/M2
+      ludus-uci     UCI protocol and entry point                    M1
+      ludus-nnue    NNUE implementation of Evaluator                M4
+      ludus-tools   perft runner, benchmarks, dataset generator     M2+
+  -->
+  <modules>
+    <module>ludus-core</module>
+  </modules>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>24</maven.compiler.release>
+
+    <!--
+      A JUnit Platform tag expression. The default keeps the deep perft runs out of an ordinary
+      `mvn test` so it stays fast enough to run on every push (DESIGN.md §8.3); `-Pslow` inverts
+      it, and `-Dtest.tags=...` overrides it for anything else.
+    -->
+    <test.tags>!slow</test.tags>
+
+    <junit.version>6.1.3</junit.version>
+    <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+    <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven-compiler-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven-surefire-plugin.version}</version>
+          <configuration>
+            <groups>${test.tags}</groups>
+            <argLine>-Xmx2g</argLine>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+  </build>
+
+  <profiles>
+    <profile>
+      <!-- mvn test -Pslow — the full perft suite, deep entries included. Minutes, not seconds. -->
+      <id>slow</id>
+      <properties>
+        <test.tags>slow</test.tags>
+      </properties>
+    </profile>
+  </profiles>
+</project>

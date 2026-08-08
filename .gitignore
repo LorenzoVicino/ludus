@@ -1,13 +1,12 @@
-# Compiled output — never commit build artifacts
+# Build output — never commit compiled artifacts
+target/
 *.class
-*.jar
-!gradle/wrapper/gradle-wrapper.jar
-build/
-out/
 bin/
+out/
 
-# Gradle
-.gradle/
+# Maven wrapper keeps its properties file; nothing else under .mvn is ours
+.mvn/.develocity/
+.mvn/.gradle-enterprise/
 
 # IDE
 .idea/
@@ -31,7 +30,6 @@ training/__pycache__/
 training/.venv/
 venv/
 
-# Benchmark and match output
+# Match and benchmark output
 *.pgn
 *.log
-jmh-result.*

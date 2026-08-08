@@ -65,6 +65,8 @@ Regola dura: *se l'SPRT non passa, la patch non entra*, per quanto elegante sia 
 
 Benchmark JMH su un set fisso di ~30 posizioni, a profondità fissa. Serve a distinguere i due modi in cui una patch può fallire: *cerca peggio* (nps uguale, Elo giù) contro *cerca più lentamente* (nps giù). Sono bug diversi e senza questa metrica li confondi.
 
+**Baseline di M0**, misurato dalla suite perft profonda: **36–55 milioni di nodi al secondo**, dove un nodo comprende generazione pseudo-legale, `makeMove`, verifica di legalità e `unmakeMove`. Circa 610 milioni di nodi in 12,6 secondi su tutti i 32 casi. Non è ancora l'nps della ricerca — non c'è ricerca — ma è il tetto contro cui misurarla, e conferma che la disciplina zero-allocazione di §3.3 sta pagando.
+
 ### 1.4 L'invariante dell'accumulatore — l'oracolo dell'Atto II
 
 L'aggiornamento incrementale della NNUE deve dare **esattamente** lo stesso risultato del ricalcolo da zero, bit per bit. Questo è un test, non una speranza. Dettagli in §7.4.
@@ -75,7 +77,9 @@ L'aggiornamento incrementale della NNUE deve dare **esattamente** lo stesso risu
 
 ### 2.1 Moduli
 
-Gradle multi-modulo (Kotlin DSL), JDK 25 LTS.
+Maven multi-modulo, JDK 24.
+
+> **Scostamenti dalla prima stesura, registrati qui perché un design doc che non segue la realtà smette di essere utile.** La build era prevista in Gradle: è Maven, per scelta esplicita. E il target era JDK 25 LTS: è 24, la versione installata sulla macchina di sviluppo. Nessuna delle due cambia niente di sostanziale — la Vector API dell'Atto II è in incubator in entrambe.
 
 ```
 ludus/
@@ -171,7 +175,13 @@ Lo `0` non è una mossa valida (from == to == 0), quindi funziona come sentinell
 - **Cavallo, re, pedone**: tabelle precalcolate, `long[64]`. Banale.
 - **Alfiere, torre, donna**: **magic bitboard**. Tabelle di attacco indicizzate da `(occupancy & mask) * magic >>> shift`.
 
-Nota per chi arriva dal C++: l'istruzione `PEXT` di BMI2, che è la via moderna e più semplice, **non è raggiungibile da Java** in modo portabile. Le magic sono l'unica strada. Usa magic già pubblicate invece di cercarle a runtime — cercarle è un esercizio carino ma rallenta l'avvio e non c'entra col progetto.
+Nota per chi arriva dal C++: l'istruzione `PEXT` di BMI2, che è la via moderna e più semplice, **non è raggiungibile da Java** in modo portabile. Le magic sono l'unica strada.
+
+**Scostamento, e il ragionamento che l'ha causato.** Questa sezione diceva di usare magic già pubblicate invece di cercarle a runtime. L'implementazione le cerca, con seed fisso, e il motivo è che una magic sbagliata **non fallisce in modo rumoroso**: restituisce in silenzio l'attacco corretto per l'occupancy sbagliata, e il sintomo emerge come una mossa impossibile mille nodi più tardi. Trascrivere a mano 128 costanti da 64 bit è esattamente il compito in cui una cifra sbagliata sopravvive alla revisione.
+
+Una ricerca non può commettere quell'errore, perché **verifica** ogni candidata contro l'implementazione di riferimento per tutte le occupancy prima di accettarla: le tabelle sono corrette per costruzione invece che per trascrizione. Il costo è qualche decina di millisecondi all'avvio, pagato una volta; se un giorno dovesse pesare, le magic trovate si possono stampare e fissare. I seed fissi rendono la ricerca deterministica, quindi ogni run di ogni build produce tabelle identiche byte per byte.
+
+È il principio di §4.2 applicato un livello più in basso: il codice lento e ovviamente corretto esiste per validare quello veloce.
 
 ### 4.2 Strategia in due tempi (deliberata)
 
@@ -408,7 +418,7 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 
 | # | Contenuto | Fatto quando |
 |---|---|---|
-| **M0** | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
+| **M0** ✅ | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
 | **M1** | Negamax, HCE minima, UCI | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
 | **M2** | Quiescence, TT, move ordering, iterative deepening | Batte M1 con SPRT. Questo è il **baseline Elo** |
 | **M3** | Movegen legale diretta, potature, time management | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
@@ -416,6 +426,8 @@ Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
 | **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
 
 **M0 e M1 sono un weekend a testa.** M2 è dove il motore inizia a essere forte. M4 è il momento in cui hai il numero da mettere nel README, e da lì M5 può durare quanto ti diverte.
+
+**M0 è chiuso.** Tutti i 32 casi della suite perft passano, i due invarianti della board (make/unmake reversibile, zobrist incrementale contro ricalcolato) sono verdi su partite casuali con seed fisso, e le tabelle magic sono validate contro il ray walking. 60 test in 3 secondi per il gate veloce, 32 casi perft profondi in 14 secondi per il nightly.
 
 La cosa importante di questa scaletta: **M1 è già un repo pubblicabile**. Un motore che gioca partite legali con UCI e CI verde è un progetto finito, non un cantiere. Tutto il resto è miglioramento incrementale su una base che si difende da sola. È l'assicurazione contro il repo abbandonato a metà.
 

@@ -4,8 +4,11 @@ A UCI chess engine written in Java, built in two acts: first a classical engine 
 hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
 incrementally updated accumulator — replacing it.
 
-**Status: design phase.** No engine code yet. The architecture, the measurement strategy and
-the milestone plan are in [`DESIGN.md`](DESIGN.md).
+**Status: M0 complete.** Position representation, magic bitboard move generation, Zobrist hashing
+and perft. The full perft suite passes — all 32 published counts across six positions, Kiwipete at
+depth 5 and the initial position at depth 6 included. There is no search yet; that is M1.
+
+The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
 ## Why two acts
 
@@ -61,16 +64,41 @@ than a handicap. Some of what the constraint forces:
 
 | | | Done when |
 |---|---|---|
-| **M0** | Board, magic bitboards, move generation | The full perft suite passes |
+| **M0** ✅ | Board, magic bitboards, move generation | The full perft suite passes |
 | **M1** | Search, evaluation, UCI | Plays a complete legal game against a GUI |
 | **M2** | Quiescence, transposition table, move ordering | Beats M1 by SPRT — the Elo baseline |
 | **M3** | Direct legal movegen, pruning, time management | Perft still correct, every patch SPRT-positive |
 | **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
 
-## Requirements
+## Building
 
-JDK 25, Gradle. Training scripts (Act II) are a separate Python project under `training/`.
+JDK 24 is the only prerequisite — the Maven wrapper fetches Maven itself.
+
+```bash
+./mvnw verify          # build and the fast test suite: 60 tests, about 3 seconds
+./mvnw test -Pslow     # the full perft suite: 32 cases, about 15 seconds
+```
+
+The split exists so the gating build stays quick. Deep perft counts roughly 600 million nodes, so
+it runs nightly and on demand rather than on every push.
+
+Current M0 measurements, from the deep suite:
+
+| Position | Depth | Nodes | Nodes/second |
+|---|---:|---:|---:|
+| Initial | 6 | 119,060,324 | 36.6 M |
+| Kiwipete | 5 | 193,690,690 | 53.8 M |
+| Position 3 | 6 | 11,030,083 | 46.0 M |
+| Position 4 | 5 | 15,833,292 | 49.8 M |
+| Position 5 | 5 | 89,941,194 | 47.8 M |
+| Position 6 | 5 | 164,075,551 | 55.2 M |
+
+A node here means pseudo-legal generation, `makeMove`, a legality check and `unmakeMove`. This is
+not search speed — there is no search yet — but it is the ceiling the search will be measured
+against, and it is what the zero-allocation discipline buys.
+
+Training scripts (Act II) will be a separate Python project under `training/`.
 
 ## License
 
