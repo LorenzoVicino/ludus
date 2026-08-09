@@ -54,7 +54,7 @@ class SelfPlayTest {
 
     @Test
     void jobsSurviveTheWireFormat() {
-        SelfPlayJob job = new SelfPlayJob(3, 12345L, 40, 6);
+        SelfPlayJob job = new SelfPlayJob(3, 12345L, 40, 6, true);
         assertEquals(job, SelfPlayJob.decode(job.encode()));
         assertThrows(IllegalArgumentException.class, () -> SelfPlayJob.decode("1|2"));
     }
@@ -107,3 +107,4 @@ class SelfPlayTest {
         }
     }
 }
+

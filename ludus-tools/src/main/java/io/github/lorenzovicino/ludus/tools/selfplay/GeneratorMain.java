@@ -1,5 +1,6 @@
 package io.github.lorenzovicino.ludus.tools.selfplay;
 
+import io.github.lorenzovicino.ludus.tools.EndgameSeeds;
 import io.github.lorenzovicino.ludus.tools.OpeningBook;
 import io.github.lorenzovicino.ludus.tools.dist.RabbitBroker;
 import java.time.Duration;
@@ -97,7 +98,8 @@ public final class GeneratorMain {
                     // hands the whole job back, which may duplicate samples on the retry — harmless
                     // for training data, and the reason a match tally settles differently.
                     raw.ack();
-                    System.out.printf("job %d: %d games, %d samples%n", job.id(), job.games(), produced);
+                    System.out.printf("job %d (%s): %d games, %d samples%n", job.id(),
+                            job.fromEndgame() ? "endgame" : "opening", job.games(), produced);
                 } catch (RuntimeException e) {
                     System.err.printf("job %d failed (%s); handing it back%n", job.id(), e);
                     raw.requeue();
@@ -110,7 +112,12 @@ public final class GeneratorMain {
 
     private static int playAndPublish(RabbitBroker broker, SelfPlayGenerator generator,
                                       SelfPlayJob job) {
-        List<String> openings = OpeningBook.generate(job.games(), 8, job.seed());
+        // Endgames are constructed rather than played into: self-play between equal engines ends in
+        // the middlegame or by the fifty-move rule, so a dataset built only from openings is thin
+        // exactly where the evaluation behaves least like its middlegame self.
+        List<String> openings = job.fromEndgame()
+                ? EndgameSeeds.generate(job.games(), job.seed())
+                : OpeningBook.generate(job.games(), 8, job.seed());
         List<String> batch = new ArrayList<>(BATCH_SIZE);
         int produced = 0;
 

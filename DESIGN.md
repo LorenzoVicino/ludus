@@ -1039,6 +1039,40 @@ queue was built for.
 The infrastructure for all of it is built and verified. The order of the remaining work is what
 changed.
 
+### 9.06 Acting on the diagnosis
+
+Both halves of "a better teacher and endgame coverage" turned into code.
+
+**Endgames are constructed, not played into.** `EndgameSeeds` places a king plus a plausible material
+set — K+R v K+R, K+Q v K+R, rook-and-pawn, bare pawn endings, and eleven others — on random squares
+and keeps the position only if the kings are not adjacent, no pawn sits on the first or eighth rank,
+the side that just moved is not still in check, and the side to move has a legal reply. Walking
+further into self-play games would not have worked, because the games do not go there: they end in
+the middlegame or by the fifty-move rule. `--endgame-fraction` (default 0.35) decides the share, and
+the jobs are interleaved rather than grouped so a run cut short still contains both kinds. Measured
+on a sample: 38% of positions have eight pieces or fewer, against the 35% asked for.
+
+**Depth was chosen by measuring rather than guessing.** Four ply deeper sounds expensive; it is not.
+Twenty threads on this machine:
+
+| Teacher depth | Samples/minute |
+|---:|---:|
+| 6 (original) | 70,300 |
+| 8 | 12,500 |
+| 9 | 7,900 |
+| 10 | 4,700 |
+
+Fifteen times slower per position, and still 600,000 positions in about two hours. Since the
+diagnosis said the problem was the *quality* of the labels and not their number, depth buys more than
+volume does, and depth 10 was affordable. The estimate this replaces — "about 30,000 positions a
+minute" — was measured at the shallower depth and does not survive the change.
+
+**The queue stopped being mandatory.** `collect --local` generates in-process across N threads with
+no broker at all. RabbitMQ earns its place when generation is spread across machines or run alongside
+training; requiring it to produce a dataset on one laptop was friction I had introduced, and it kept
+CI out of the pipeline entirely. The distributed path is unchanged and still the one the architecture
+diagram describes — there is now simply a way to do the same work without it.
+
 ### 9.1 M6 — the status page
 
 Last by design: it collects the numbers the earlier milestones produce, so those have to exist first.
