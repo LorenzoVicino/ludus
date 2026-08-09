@@ -1,0 +1,23 @@
+# The broker the distributed match runner talks to.
+#
+# Development tooling only. Nothing here is needed to build, test or play the engine — the jar a
+# GUI launches has no dependencies at all. This exists so a match can be spread across machines,
+# which matters because a single SPRT match is 300 to 500 games and the wall time of one is the
+# bottleneck on how fast patches can be evaluated.
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: ludus-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # management UI, http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      # Workers and the coordinator connect immediately on start, so "the container is running" is
+      # not the same as "the broker is ready to accept a connection".
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

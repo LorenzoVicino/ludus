@@ -75,6 +75,30 @@ opening book as much as the engines. Time is a fixed allowance per move rather t
 clock: that separates what the search does with the time it gets from how well a version divides
 a clock, which are different questions.
 
+### Spreading a match across machines
+
+A match is 300 to 500 games and its wall time is what limits how fast patches can be evaluated, so
+the runner also works as a coordinator and any number of workers, with RabbitMQ in between:
+
+```bash
+docker compose up -d                       # the broker
+
+java -jar ludus-tools/target/ludus-match.jar coordinator --pairs 250 --sprt 0 10
+
+java -jar ludus-tools/target/ludus-match.jar worker \
+    --engine-a "java -jar build/candidate.jar" \
+    --engine-b "java -jar build/baseline.jar" \
+    --movetime 100 --concurrency 4         # on each machine with cores to spare
+```
+
+Nothing is acknowledged until its games are played and the result is published, so a machine that
+dies mid-job hands the work back rather than losing it. That is verified rather than assumed: with a
+worker holding a job the queue reads `3 ready, 1 unacknowledged`; kill the process and it reads
+`4 ready, 0 unacknowledged`.
+
+This is the only third-party runtime dependency in the project, and it lives in `ludus-tools`, which
+never ships inside the engine jar. The engine a GUI launches still has none.
+
 A third invariant guards Act II: the incrementally updated accumulator must be bit-for-bit
 identical to a full recomputation, verified by property tests over random games. A bug there
 does not crash anything — it just quietly makes the engine play worse.

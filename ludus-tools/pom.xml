@@ -22,6 +22,33 @@
       <groupId>io.github.lorenzovicino</groupId>
       <artifactId>ludus-core</artifactId>
     </dependency>
+
+    <!--
+      The only third-party runtime dependency in the whole project, and it is confined here on
+      purpose. ludus-tools is development tooling: it never ships inside the engine jar a GUI
+      launches, so the engine keeps its zero-dependency property intact.
+    -->
+    <dependency>
+      <groupId>com.rabbitmq</groupId>
+      <artifactId>amqp-client</artifactId>
+      <version>${amqp-client.version}</version>
+    </dependency>
+    <!--
+      amqp-client brings slf4j-api 1.7 transitively. Pinning the 2.x api next to the 2.x binding
+      keeps the pair consistent: mixing a 2.x binding with the 1.7 api leaves SLF4J hunting for a
+      StaticLoggerBinder that no longer exists, and every broker diagnostic goes to a no-op logger
+      exactly when something has gone wrong.
+    -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${slf4j.version}</version>
+    </dependency>
   </dependencies>
 
   <build>
@@ -45,6 +72,13 @@
               <finalName>ludus-match</finalName>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
+                <!--
+                  Merges META-INF/services instead of letting one jar's copy overwrite another's.
+                  SLF4J 2 finds its binding through ServiceLoader, so without this the shaded jar
+                  silently falls back to a no-op logger and every broker diagnostic disappears.
+                -->
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                 <transformer
                     implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>io.github.lorenzovicino.ludus.tools.MatchMain</mainClass>
@@ -62,6 +96,13 @@
               <finalName>ludus-status</finalName>
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <transformers>
+                <!--
+                  Merges META-INF/services instead of letting one jar's copy overwrite another's.
+                  SLF4J 2 finds its binding through ServiceLoader, so without this the shaded jar
+                  silently falls back to a no-op logger and every broker diagnostic disappears.
+                -->
+                <transformer
+                    implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                 <transformer
                     implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>io.github.lorenzovicino.ludus.tools.StatusMain</mainClass>

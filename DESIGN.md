@@ -103,6 +103,52 @@ win/draw/loss split rather than assumed. That matters because the split is very 
 engines a hundred Elo apart and two engines five apart, and assuming it would make the test
 optimistic in exactly the case that calls for caution.
 
+### 1.2.1 Running a match across machines
+
+A match is 300 to 500 games and its wall time is what limits how fast patches can be evaluated. The
+runner therefore has a second mode: a coordinator hands out openings over **RabbitMQ**, and any
+number of workers on any number of machines play them.
+
+**This is the only third-party runtime dependency in the project, and it is confined to
+`ludus-tools`.** That module is development tooling and never ships inside the jar a GUI launches, so
+the engine keeps its zero-dependency property. A broker connection inside the engine would be
+indefensible: it is a subprocess that must start in milliseconds and must not allocate in its hot
+loop.
+
+The unit of work is an **opening pair**, not a game, because the colour swap is what cancels the
+opening's bias — splitting a pair across machines would make a half-result meaningless, and losing
+half a pair is exactly what happens when a worker dies.
+
+What the broker is actually being relied on for, rather than used to decorate:
+
+| | |
+|---|---|
+| **Manual acknowledgement** | Nothing is settled on receipt. A job is acknowledged only after its games are played *and* the result is published, so a machine that dies mid-job hands the work back instead of losing it |
+| **Prefetch** | The backpressure. A job is minutes of work, so a worker takes as many as it has threads and no more — otherwise the first machine to connect claims the whole match and the others idle |
+| **Publisher confirms** | A dropped result is minutes of CPU gone and, worse, a tally that silently disagrees with the games actually played |
+| **Durable queues, persistent messages** | A broker restart must not discard a match in progress |
+| **Dead-letter queue** | A job that cannot be played stops cycling through workers and stays somewhere it can be looked at |
+
+**Verified rather than assumed.** With a worker holding a job, the queue reads `3 ready, 1
+unacknowledged`. Kill the worker process and its engines outright, and it reads `4 ready, 0
+unacknowledged` — the job came back on its own. That is the whole reason for putting a broker in the
+middle, so it is checked with a real `kill` rather than trusted from the documentation.
+
+The transport sits behind an interface with an in-memory implementation, for the same reason the
+engine has one in front of its evaluation: the coordination logic is worth testing on its own, and a
+test that needs a running broker does not run in CI.
+
+**What this does not fix.** Throughput, not resumability. An inconclusive match still has to be
+replayed from the start — the limitation recorded in §9.0 stands, and distributing the work only
+makes each attempt faster.
+
+**Two things that cost an hour and are worth writing down.** The default virtual host is named
+`/`, and in a URI that slash must be percent-encoded: ending the URI with a bare `/` asks for a
+virtual host named `""` and the broker answers `NOT_ALLOWED - vhost  not found`, where the only clue
+is the double space. And the shaded jar needs a services transformer, or SLF4J's ServiceLoader
+binding is overwritten and every broker diagnostic disappears into a no-op logger at precisely the
+moment something has gone wrong.
+
 ### 1.3 nps — the performance oracle
 
 The purpose is to separate the two ways a patch can fail: *searching worse* (same nps, Elo down)

@@ -1,36 +1,34 @@
 package io.github.lorenzovicino.ludus.tools;
 
-import io.github.lorenzovicino.ludus.core.Bitboards;
-import io.github.lorenzovicino.ludus.core.Board;
-import io.github.lorenzovicino.ludus.core.MoveGenerator;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
+import io.github.lorenzovicino.ludus.tools.dist.CoordinatorMain;
+import io.github.lorenzovicino.ludus.tools.dist.WorkerMain;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
-import java.util.Set;
 
 /**
- * Command line entry point for the match runner.
+ * Entry point for the match runner, in three modes.
  *
  * <pre>
- * java -jar ludus-match.jar \
- *     --engine-a "java -jar build/ludus-new.jar" \
- *     --engine-b "java -jar build/ludus-old.jar" \
- *     --book openings.epd \
- *     --pairs 150 --movetime 100 --concurrency 8 \
- *     --sprt 0 10
+ * ludus-match local       everything on this machine, threads and subprocesses
+ * ludus-match coordinator hands out openings over a broker and collects results
+ * ludus-match worker      plays openings somebody else scheduled
  * </pre>
  *
- * <p>Exits 0 when the new version is accepted, 1 when it is rejected, 2 when the match ended without
- * a verdict, and 3 on a usage or setup error. That mapping is what lets CI gate a patch on the
- * result rather than on somebody reading the output.
+ * <p>{@code local} is the default and is what a single machine should use: it needs nothing running
+ * and no configuration. The other two exist because one SPRT match is 300 to 500 games, and the wall
+ * time of a match is what limits how quickly patches can be evaluated.
+ *
+ * <p>All three exit the same way — 0 accepted, 1 rejected, 2 inconclusive, 3 error — so a workflow can
+ * gate a patch on the result without caring which mode produced it.
+ *
+ * <pre>
+ * java -jar ludus-match.jar local \
+ *     --engine-a "java -jar build/candidate.jar" \
+ *     --engine-b "java -jar build/baseline.jar" \
+ *     --pairs 100 --movetime 100 --concurrency 8 --sprt 0 10
+ * </pre>
  */
 public final class MatchMain {
 
@@ -44,19 +42,53 @@ public final class MatchMain {
 
     public static void main(String[] args) {
         try {
-            System.exit(run(args));
+            System.exit(dispatch(args));
         } catch (IllegalArgumentException e) {
             System.err.println("error: " + e.getMessage());
             System.err.println();
             usage();
             System.exit(EXIT_ERROR);
-        } catch (IOException | InterruptedException e) {
-            System.err.println("error: " + e);
+        } catch (Exception e) {
+            // The whole chain, not just toString(). A broker refusing a connection throws an
+            // IOException whose message is null, and "error: java.io.IOException" tells nobody
+            // anything — the reason is always further down the chain.
+            System.err.println("error: " + describe(e));
+            for (Throwable cause = e.getCause(); cause != null; cause = cause.getCause()) {
+                System.err.println("  caused by: " + describe(cause));
+            }
             System.exit(EXIT_ERROR);
         }
     }
 
-    private static int run(String[] args) throws IOException, InterruptedException {
+    private static String describe(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null || message.isBlank()
+                ? throwable.getClass().getName()
+                : throwable.getClass().getSimpleName() + ": " + message;
+    }
+
+    private static int dispatch(String[] args) throws Exception {
+        if (args.length == 0 || args[0].equals("--help") || args[0].equals("-h")) {
+            usage();
+            return args.length == 0 ? EXIT_ERROR : EXIT_ACCEPTED;
+        }
+        String[] rest = Arrays.copyOfRange(args, 1, args.length);
+        return switch (args[0]) {
+            case "local" -> runLocal(rest);
+            case "worker" -> WorkerMain.run(rest);
+            case "coordinator" -> CoordinatorMain.run(rest);
+            // Options straight away is the original single-mode invocation, kept working.
+            default -> args[0].startsWith("--")
+                    ? runLocal(args)
+                    : fail("unknown mode " + args[0]);
+        };
+    }
+
+    private static int fail(String message) {
+        throw new IllegalArgumentException(message);
+    }
+
+    private static int runLocal(String[] args) throws Exception {
         String engineA = null;
         String engineB = null;
         Path book = null;
@@ -90,10 +122,6 @@ public final class MatchMain {
                 }
                 case "--alpha" -> alpha = Double.parseDouble(require(args, ++i, "--alpha"));
                 case "--beta" -> beta = Double.parseDouble(require(args, ++i, "--beta"));
-                case "--help", "-h" -> {
-                    usage();
-                    return EXIT_ACCEPTED;
-                }
                 default -> throw new IllegalArgumentException("unknown option " + args[i]);
             }
         }
@@ -103,8 +131,8 @@ public final class MatchMain {
         }
 
         List<String> openings = book == null
-                ? generateBook(pairs, openingPlies, seed)
-                : loadBook(book, seed);
+                ? OpeningBook.generate(pairs, openingPlies, seed)
+                : OpeningBook.load(book, seed);
 
         Sprt sprt = new Sprt(elo0, elo1, alpha, beta);
         MatchRunner.Config config = new MatchRunner.Config(
@@ -113,14 +141,14 @@ public final class MatchMain {
         System.out.printf("A: %s%nB: %s%n", engineA, engineB);
         System.out.printf("%d opening pairs, %d ms per move, concurrency %d%n",
                 Math.min(pairs, openings.size()), moveTime, concurrency);
-        System.out.printf("SPRT H0 %.1f vs H1 %.1f Elo, alpha %.2f beta %.2f%n%n", elo0, elo1, alpha, beta);
+        System.out.printf("SPRT H0 %.1f vs H1 %.1f Elo, alpha %.2f beta %.2f%n%n",
+                elo0, elo1, alpha, beta);
 
         MatchRunner runner = new MatchRunner(
                 split(engineA), split(engineB), openings, config, sprt);
-        MatchRunner.Result result = runner.run();
+        MatchResult result = runner.run();
 
         EloEstimate estimate = EloEstimate.of(result.wins(), result.draws(), result.losses());
-        Sprt.Verdict verdict = result.verdict();
 
         System.out.println();
         System.out.println("=".repeat(72));
@@ -130,13 +158,13 @@ public final class MatchMain {
                 sprt.lowerBound(), sprt.upperBound());
         System.out.printf("stopped: %s%n",
                 result.stoppedEarly() ? "a bound was crossed" : "the book ran out");
-        System.out.println("verdict: " + describe(verdict));
+        System.out.println("verdict: " + describe(result.verdict()));
         if (result.illegalByA() > 0 || result.illegalByB() > 0) {
             System.out.printf("ILLEGAL MOVES  A: %d  B: %d%n", result.illegalByA(), result.illegalByB());
         }
         System.out.println("=".repeat(72));
 
-        return switch (verdict) {
+        return switch (result.verdict()) {
             case H1_ACCEPTED -> EXIT_ACCEPTED;
             case H0_ACCEPTED -> EXIT_REJECTED;
             case INCONCLUSIVE -> EXIT_INCONCLUSIVE;
@@ -149,96 +177,6 @@ public final class MatchMain {
             case H0_ACCEPTED -> "H0 accepted — A is not better, the change is dropped";
             case INCONCLUSIVE -> "inconclusive — the match ran out of openings before deciding";
         };
-    }
-
-    /**
-     * Builds an opening book by walking a few random legal moves out of the start position.
-     *
-     * <p>Generating beats downloading one. A curated book is a file that has to exist on whatever
-     * machine runs the match, which makes CI depend on fetching it; this needs nothing but the move
-     * generator that is already here, and {@code --seed} makes it reproducible.
-     *
-     * <p>Positions where anything has been captured are rejected. Random moves hang pieces, and an
-     * opening that starts a rook down is not a test of anything. Requiring the full complement of
-     * material is a cruder filter than an evaluation would be, but it needs no evaluation — which
-     * keeps this module dependent on the core alone — and it is decisive rather than approximate.
-     *
-     * <p>Residual imbalance does not matter much anyway: every opening is played twice with the
-     * colours swapped, so a position that favours one side hands the same advantage to each engine
-     * in turn.
-     */
-    private static List<String> generateBook(int count, int plies, long seed) {
-        List<String> positions = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        Random random = new Random(seed);
-        int[] moves = new int[MoveGenerator.MAX_MOVES];
-
-        int attempts = 0;
-        int attemptLimit = Math.max(1000, count * 200);
-
-        while (positions.size() < count && attempts < attemptLimit) {
-            attempts++;
-            Board board = Board.startPosition();
-            boolean playable = true;
-
-            for (int ply = 0; ply < plies; ply++) {
-                int legal = MoveGenerator.filterLegal(board, moves, MoveGenerator.generate(board, moves));
-                if (legal == 0) {
-                    playable = false;
-                    break;
-                }
-                board.makeMove(moves[random.nextInt(legal)]);
-            }
-            if (!playable || Bitboards.count(board.occupied()) != 32) {
-                continue;
-            }
-            // A position with no moves is over before either engine has played one.
-            if (MoveGenerator.filterLegal(board, moves, MoveGenerator.generate(board, moves)) == 0) {
-                continue;
-            }
-
-            String fen = board.toFen();
-            if (seen.add(fen)) {
-                positions.add(fen);
-            }
-        }
-
-        if (positions.isEmpty()) {
-            throw new IllegalStateException("Could not generate any openings");
-        }
-        return positions;
-    }
-
-    /**
-     * Reads an EPD or FEN book, one position per line, and shuffles it with a fixed seed so a rerun
-     * plays the same openings in the same order.
-     */
-    private static List<String> loadBook(Path path, long seed) throws IOException {
-        List<String> positions = new ArrayList<>();
-        for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
-            String trimmed = line.trim();
-            if (trimmed.isEmpty() || trimmed.startsWith("#")) {
-                continue;
-            }
-            String[] fields = trimmed.split("\\s+");
-            if (fields.length < 4) {
-                continue;
-            }
-            // An EPD line is a FEN's first four fields followed by opcodes; the clocks are optional
-            // and anything after them is not ours to interpret.
-            String fen = String.join(" ", Arrays.copyOfRange(fields, 0, 4)) + " 0 1";
-            try {
-                Board.fromFen(fen);
-                positions.add(fen);
-            } catch (RuntimeException ignored) {
-                // Not a position we can parse; skip rather than abandon the book.
-            }
-        }
-        if (positions.isEmpty()) {
-            throw new IllegalArgumentException("no usable positions in " + path);
-        }
-        Collections.shuffle(positions, new Random(seed));
-        return positions;
     }
 
     private static List<String> split(String command) {
@@ -254,23 +192,39 @@ public final class MatchMain {
 
     private static void usage() {
         System.err.println("""
-                usage: ludus-match --engine-a CMD --engine-b CMD [options]
+                usage: ludus-match <mode> [options]
 
-                  --engine-a CMD     command that launches the new version
+                MODES
+                  local        run the whole match here (default if options come first)
+                  coordinator  hand out openings over a broker and collect results
+                  worker       play openings a coordinator scheduled
+
+                LOCAL
+                  --engine-a CMD     command that launches the candidate
                   --engine-b CMD     command that launches the baseline
-                  --book PATH        EPD or FEN opening book, one position per line.
-                                     Omit it and a book is generated from the start position
+                  --book PATH        EPD or FEN book. Omit it and one is generated
                   --opening-plies K  random plies when generating a book (default 8)
-                  --pairs N          opening pairs to play, two games each (default 100)
+                  --pairs N          opening pairs, two games each (default 100)
                   --movetime MS      fixed allowance per move (default 100)
                   --concurrency K    games in parallel (default: cores / 3)
                   --max-plies N      draw a game that reaches this length (default 300)
                   --sprt E0 E1       hypothesis bounds in Elo (default 0 10)
                   --alpha A          false-accept rate (default 0.05)
                   --beta B           false-reject rate (default 0.05)
-                  --seed S           book shuffle seed (default 20260808)
-                  --fixed            play every opening instead of stopping at a bound,
-                                     for when the Elo figure matters more than the verdict
+                  --seed S           book seed (default 20260808)
+                  --fixed            play every opening instead of stopping at a bound
+
+                COORDINATOR
+                  --broker URI       AMQP URI (default amqp://guest:guest@localhost:5672/)
+                  --pairs, --sprt, --alpha, --beta, --seed, --opening-plies, --fixed as above
+                  --timeout MIN      give up if no result arrives for this long (default 30)
+
+                WORKER
+                  --engine-a CMD, --engine-b CMD   both jars must exist on this machine
+                  --broker URI       AMQP URI
+                  --movetime MS, --max-plies N     as above
+                  --concurrency K    engine pairs on this machine (default 1)
+                  --idle-timeout S   exit after this long with no work (default 120)
 
                 exit: 0 accepted, 1 rejected, 2 inconclusive, 3 error
 
