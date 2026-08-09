@@ -54,7 +54,15 @@ def main() -> int:
 
     model = Nnue()
     optimiser = torch.optim.Adam(model.parameters(), lr=arguments.lr)
+    # Decayed to a fortieth of the starting rate by the last epoch. The first network was trained at a
+    # flat rate and its validation loss was still falling when the run ended, which says the run was
+    # too short — but a flat rate also spends the late epochs stepping too coarsely to settle.
+    schedule = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimiser, T_max=arguments.epochs, eta_min=arguments.lr / 40)
     loss_function = nn.MSELoss()
+
+    best_loss = float("inf")
+    best_epoch = 0
 
     for epoch in range(1, arguments.epochs + 1):
         started = time.time()
@@ -78,11 +86,22 @@ def main() -> int:
             batches += 1
 
         validation_loss = evaluate(model, validation_loader, loss_function, arguments.lambda_score)
-        print(f"epoch {epoch:2d}  train {total / max(1, batches):.5f}  "
-              f"validation {validation_loss:.5f}  {time.time() - started:.1f}s")
+        schedule.step()
 
-    torch.save(model.state_dict(), arguments.out)
-    print(f"saved {arguments.out}")
+        # Kept by validation loss rather than by being last. An epoch that overfits should not be able
+        # to overwrite a better network the run already had in hand.
+        improved = validation_loss < best_loss
+        if improved:
+            best_loss, best_epoch = validation_loss, epoch
+            torch.save(model.state_dict(), arguments.out)
+
+        print(f"epoch {epoch:2d}  train {total / max(1, batches):.5f}  "
+              f"validation {validation_loss:.5f}  lr {schedule.get_last_lr()[0]:.2e}  "
+              f"{time.time() - started:.1f}s{'  <- kept' if improved else ''}")
+
+    print(f"saved {arguments.out}: epoch {best_epoch}, validation {best_loss:.5f}")
+    if best_epoch == arguments.epochs:
+        print("the last epoch was the best one - the run is still improving, so train longer")
     return 0
 
 
