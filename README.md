@@ -25,15 +25,26 @@ because it was inert: its guard correctly refused to fire on wide search windows
 no narrow ones until principal variation search created them. Shipped without measurement, it would
 have been a feature that did nothing. The full account is in [`DESIGN.md`](DESIGN.md) §9.0.
 
-**Act II is built but not yet good.** The network runs — the accumulator matches a full
-recomputation bit for bit over 73,862 positions, and the engine reproduces PyTorch's own answer to
-within 4 centipawns — but the first trained network lost its match against the hand-crafted
-evaluation by **−589 ± 147 Elo**, so it is not the default. It was trained on 252,000 positions;
-networks that work use tens of millions.
+**Act II is built, and losing for a measurable reason.** The network runs — the accumulator matches a
+full recomputation bit for bit over 73,862 positions, and the engine reproduces PyTorch's own answer
+to within 4 centipawns — but the first trained network lost to the hand-crafted evaluation by
+**−589 ± 147 Elo**, so it is not the default.
 
-That distinction is the whole reason the agreement test exists: it separates "the network is weak"
-from "the engine runs it wrongly", and those need completely different work.
-[`DESIGN.md`](DESIGN.md) §9.05 has the full account.
+The obvious explanation was too little training data. The benchmark said otherwise:
+
+```
+hand-crafted        depth 8   2,160,818 nodes    346 ms   6,245,138 nodes/s
+network             depth 8   3,097,290 nodes   9421 ms     328,764 nodes/s
+```
+
+**Nineteen times slower** — two to three plies of depth given up before the network's opinion matters
+at all. That reorders the remaining work: making inference fast is now a prerequisite for the network
+being worth training further, not a follow-on. [`DESIGN.md`](DESIGN.md) §9.05 has the account.
+
+Two measurements made that call rather than a guess. The agreement test separates "the network is
+weak" from "the engine runs it wrongly"; the benchmark separates "searches worse" from "searches
+slower". Without either, the plausible story would have been believed and weeks of generating
+positions would have bought nothing.
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 

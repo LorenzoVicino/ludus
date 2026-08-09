@@ -35,6 +35,10 @@
       <groupId>io.github.lorenzovicino</groupId>
       <artifactId>ludus-search</artifactId>
     </dependency>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-nnue</artifactId>
+    </dependency>
 
     <!--
       The only third-party runtime dependency in the whole project, and it is confined here on
@@ -128,3 +132,4 @@
     </plugins>
   </build>
 </project>
+

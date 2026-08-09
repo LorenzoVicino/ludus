@@ -83,6 +83,7 @@ public final class MatchMain {
             case "coordinator" -> CoordinatorMain.run(rest);
             case "generate" -> GeneratorMain.run(rest);
             case "collect" -> CollectorMain.run(rest);
+            case "bench" -> BenchMain.run(rest);
             // Options straight away is the original single-mode invocation, kept working.
             default -> args[0].startsWith("--")
                     ? runLocal(args)
@@ -277,3 +278,4 @@ public final class MatchMain {
                 """);
     }
 }
+

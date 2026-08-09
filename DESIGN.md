@@ -154,8 +154,14 @@ moment something has gone wrong.
 The purpose is to separate the two ways a patch can fail: *searching worse* (same nps, Elo down)
 against *searching slower* (nps down). Different bugs, and without this metric they look identical.
 
-A JMH benchmark over a fixed position set is still **planned**. What exists today is the perft suite,
-which serves the same purpose for move generation.
+Built: `ludus-match bench` searches a fixed set of eight positions to a fixed depth and reports the
+node rate. Fixed depth rather than fixed time, deliberately — fixed time would hide exactly what is
+being measured, since a slower engine would simply search less and report the same rate.
+
+It earned itself immediately. The first trained network lost its match by 589 Elo, and the obvious
+reading was that it needed more data. The benchmark said otherwise: nineteen times slower than the
+hand-crafted evaluation, which is two to three plies of depth given away before the network's opinion
+matters at all. See §9.05.
 
 **M0 baseline**, from the deep perft run: **36–55 million nodes per second**, where a node covers
 pseudo-legal generation, `makeMove`, a legality check and `unmakeMove`. Roughly 610 million nodes in
@@ -906,25 +912,43 @@ The engine reproduces PyTorch's own answer to within 4 centipawns on every fixtu
 incremental accumulator matches a full recomputation exactly. So the implementation is faithful, and
 **the network itself is the problem**. That is worth more than the Elo figure.
 
-#### Why it is weak, in numbers
+#### It is not mainly weak. It is slow.
 
-- **252,000 training positions.** Networks that work use tens of millions. This is two orders of
-  magnitude short, and no amount of tuning closes that.
-- **A weak teacher.** The labels are depth-5 scores from an engine of maybe 2000 Elo. A student
-  cannot outrun its teacher by much, and this one had far too few lessons to get close.
-- **Undertrained.** Validation loss was still falling at the tenth epoch — training stopped because
-  the run was short, not because it had converged.
+The obvious explanation was too little training data, and it was stated before the match was run. It
+is also, as it turns out, not the main problem — which is what §1.3 exists to establish:
 
-None of that is a surprise, and it was said before the match was run rather than after.
+```
+hand-crafted         depth 8   2,160,818 nodes    346 ms   6,245,138 nodes/s
+network ludus.nnue   depth 8   3,097,290 nodes   9421 ms     328,764 nodes/s
+```
 
-#### What would actually move it
+**Nineteen times slower.** At a fixed allowance per move that is two to three plies of depth given
+up, and two to three plies at this strength is worth several hundred Elo on its own. The −589 is
+mostly a search that never got going, not an evaluation that misjudges.
 
-The generation pipeline produces about 30,000 positions a minute on one machine with eight threads.
-Twenty-five million is roughly fourteen hours — or an evening across two machines, which is precisely
-what the queue was built for. A deeper search for the labels costs proportionally more but teaches
-better. After that: a learning-rate schedule, more epochs, and `halfKP` features.
+This is precisely the distinction §1.3 was written for: *searching worse* shows up as Elo falling
+with the node rate unchanged, and *searching slower* shows up here. Without the benchmark, the
+obvious story — "it needs more data" — would have been believed, and weeks of generating positions
+would have bought nothing.
 
-The infrastructure to do all of it is built and verified. What is missing is time, not code.
+The cost is the dense layers. The first one is 512 inputs into 32 neurons: sixteen thousand
+multiply-accumulates at every leaf, against a couple of hundred operations for the hand-crafted
+evaluation. The accumulator is already incremental and is not the bottleneck.
+
+#### What this reorders
+
+**M5's Vector API work is a prerequisite for M4's exit criterion, not a follow-on.** A network that
+cannot be evaluated quickly cannot win a match however well it is trained, so the order in the
+milestone table is wrong and the work should follow the measurement instead.
+
+The data problem is real and still needs solving — 252,000 positions where working networks use tens
+of millions, labels from depth-5 searches of a roughly 2000 Elo engine, and validation loss still
+falling at the last epoch. But it is now second in line. The generation pipeline manages about 30,000
+positions a minute on one machine, so twenty-five million is an evening across two, which is what the
+queue was built for.
+
+The infrastructure for all of it is built and verified. The order of the remaining work is what
+changed.
 
 ### 9.1 M6 — the status page
 
