@@ -1,311 +1,444 @@
-# ludus — Documento di Design
+# ludus — Design Document
 
-Motore di scacchi UCI in Java, in due atti: valutazione scritta a mano, poi rete neurale NNUE.
+A UCI chess engine in Java, in two acts: a hand-written evaluation, then an NNUE.
 
-> **Nota sulla lingua.** Questo documento è in italiano perché è il nostro documento di lavoro.
-> Quando il repo diventa pubblico, `README.md` e `DESIGN.md` vanno in inglese: è un progetto
-> vetrina e la platea non è italiana.
+> **What this document is.** A working design record, not a specification written after the fact.
+> Where the implementation departed from the plan, the departure is recorded next to the original
+> reasoning rather than edited out. Those notes are the most useful thing in here: a design document
+> that stops tracking reality stops being worth reading.
 
 ---
 
-## 0. Obiettivi
+## 0. Goals
 
-**Cosa deve essere vero alla fine.**
+**What has to be true at the end.**
 
-1. Il motore è **corretto**: perft esatto su tutta la suite standard.
-2. Il motore è **forte**: Elo misurato, non stimato a occhio.
-3. L'**Atto II è un innesto, non una riscrittura**: sostituire la valutazione a mano con la NNUE non deve toccare un solo file di `search`.
-4. Ogni miglioramento è **dimostrato da un numero**, mai da un'impressione.
+1. The engine is **correct**: exact perft across the standard suite.
+2. The engine is **strong**: Elo measured, not eyeballed.
+3. **Act II is a graft, not a rewrite**: replacing the hand-written evaluation with the NNUE must not
+   touch a single file under `search`.
+4. Every improvement is **backed by a number**, never by an impression.
 
-**Non-obiettivi dichiarati** (per difendersi dallo scope creep, che è il modo standard in cui questi progetti muoiono):
+**Declared non-goals**, as a defence against the scope creep that is the standard way projects like
+this die:
 
-| Fuori scope | Perché |
+| Out of scope | Why |
 |---|---|
-| Interfaccia grafica propria | UCI ti dà Arena, Cute Chess, En Croissant gratis |
-| Ricerca parallela (Lazy SMP) | Raddoppia la difficoltà di debug della ricerca. Dopo l'Atto II, se mai |
-| Tablebase Syzygy | Elo facile ma zero contenuto interessante |
-| Libro di apertura | Idem |
-| Pondering | Complica il time management senza insegnare niente |
+| A graphical interface of our own | UCI gives you Arena, Cute Chess and En Croissant for free |
+| Parallel search (Lazy SMP) | Doubles the difficulty of debugging the search. After Act II, if ever |
+| Syzygy tablebases | Easy Elo, no interesting content |
+| Opening book | Likewise |
+| Pondering | Complicates time management and teaches nothing |
 
 ---
 
-## 1. Metriche e oracoli
+## 1. Metrics and oracles
 
-Questa sezione viene **prima** dell'architettura, ed è deliberato: gli oracoli sono il motivo per cui abbiamo scelto questo progetto. Vanno costruiti per primi, non aggiunti dopo.
+This section comes **before** the architecture, deliberately. The oracles are the reason this project
+was chosen at all, and they get built first rather than bolted on afterwards.
 
-### 1.1 Perft — l'oracolo di correttezza
+### 1.1 Perft — the correctness oracle
 
-`perft(n)` conta le foglie dell'albero legale a profondità `n`. I conteggi sono tabulati per posizioni standard: se il tuo numero non torna, hai un bug — e il **divide** (perft per ogni mossa alla radice) ti dice in quale ramo cercarlo. È un debugger di move generation, non solo un test.
+`perft(n)` counts the leaves of the legal move tree at depth `n`. The counts are published for
+standard positions, so a mismatch is proof of a bug — and **divide** (perft per root move) tells you
+which branch to look in. It is a move generation debugger, not merely a test.
 
-| Posizione | d1 | d2 | d3 | d4 | d5 | d6 |
+| Position | d1 | d2 | d3 | d4 | d5 | d6 |
 |---|---|---|---|---|---|---|
-| Initial | 20 | 400 | 8 902 | 197 281 | 4 865 609 | 119 060 324 |
-| Kiwipete | 48 | 2 039 | 97 862 | 4 085 603 | 193 690 690 | — |
-| Position 3 | 14 | 191 | 2 812 | 43 238 | 674 624 | 11 030 083 |
-| Position 4 | 6 | 264 | 9 467 | 422 333 | 15 833 292 | — |
-| Position 5 | 44 | 1 486 | 62 379 | 2 103 487 | 89 941 194 | — |
-| Position 6 | 46 | 2 079 | 89 890 | 3 894 594 | — | — |
+| Initial | 20 | 400 | 8,902 | 197,281 | 4,865,609 | 119,060,324 |
+| Kiwipete | 48 | 2,039 | 97,862 | 4,085,603 | 193,690,690 | — |
+| Position 3 | 14 | 191 | 2,812 | 43,238 | 674,624 | 11,030,083 |
+| Position 4 | 6 | 264 | 9,467 | 422,333 | 15,833,292 | — |
+| Position 5 | 44 | 1,486 | 62,379 | 2,103,487 | 89,941,194 | — |
+| Position 6 | 46 | 2,079 | 89,890 | 3,894,594 | — | — |
 
-> **Verifica questi numeri contro il Chess Programming Wiki prima di codificarli nei test.** Sono i valori standard, ma un test che asserisce il numero sbagliato è peggio di nessun test: ti fa cercare un bug che non esiste, o peggio, valida un bug che esiste.
+> **Check these against the Chess Programming Wiki before encoding them in tests.** They are the
+> standard values, but a test that asserts the wrong number is worse than no test: it sends you
+> hunting a bug that does not exist, or blesses one that does.
 
-Le FEN delle posizioni 3–6 e di Kiwipete stanno su CPW alla pagina "Perft Results" — mettile in un file di risorse `perft-suite.txt` nel formato `FEN;d1 n1;d2 n2;...`, così la suite è dati e non codice.
+The suite lives in `perft-suite.txt` as `FEN;d1 n1;d2 n2;…`, so it is data rather than code. It sits
+in **main** resources, not test resources, because two consumers read it: the tests and the status
+page generator. A second transcription of thirty-two hand-checked numbers is exactly the mistake the
+warning above describes.
 
-### 1.2 Elo — l'oracolo di forza
+### 1.2 Elo — the strength oracle
 
-Nessun cambiamento alla ricerca o alla valutazione entra senza un match.
+No change to search or evaluation lands without a match.
 
-- Avversario: la versione precedente di `ludus` stessa, come jar separato.
-- Aperture da un book `.epd` bilanciato, **colori invertiti a coppie** — senza questo un match misura il book quanto i motori, perché una posizione che favorisce leggermente il bianco regala punti a chi ha pescato il bianco più spesso.
-- **SPRT** con `elo0=0, elo1=10, alpha=beta=0.05`: si ferma da solo quando ha una risposta, invece di farti giocare 20 000 partite inutili.
+- Opponent: the previous version of `ludus` itself, as a separate jar.
+- Openings played **twice with the colours swapped** — without that, a match measures the opening
+  book as much as the engines, because a position that mildly favours White hands free points to
+  whoever drew White more often.
+- **SPRT** with `elo0=0, elo1=10, alpha=beta=0.05`: it stops on its own once it has an answer,
+  instead of making you play twenty thousand games for nothing.
 
-Regola dura: *se l'SPRT non passa, la patch non entra*, per quanto elegante sia il codice. È la disciplina che separa un motore che migliora da uno che si gonfia.
+The hard rule: *if the SPRT does not pass, the patch does not land*, however elegant the code. This is
+the discipline separating an engine that improves from one that merely grows.
 
-**Scostamento sullo strumento.** Il piano diceva **fastchess** (o `cutechess-cli`). Il match runner è invece dentro il repo, in `ludus-tools`, per due ragioni — una accidentale e una che vale a prescindere.
+**Deviation on the tool.** The plan named **fastchess** (or `cutechess-cli`). The match runner is
+instead inside the repository, in `ludus-tools`, for two reasons — one accidental, one that holds
+regardless.
 
-Quella accidentale: sulla macchina di sviluppo **Norton mette in quarantena `fastchess.exe`**. È un eseguibile non firmato, scaricato, che genera sottoprocessi: la protezione comportamentale l'ha rimosso dal disco a metà del primo match. Ha fatto lo stesso con un jar del motore copiato nella directory temporanea. Non è un problema da aggirare disattivando l'antivirus di qualcun altro.
+The accidental one: on the development machine, **Norton quarantines `fastchess.exe`**. It is an
+unsigned downloaded executable that spawns subprocesses, and behavioural protection removed it from
+disk midway through the first match. It did the same to an engine jar copied into the temporary
+directory. Disabling somebody else's antivirus is not an acceptable workaround.
 
-Quella che vale a prescindere: un harness **dentro il repo è usabile dalla CI**. Da M3 in poi ogni patch deve passare un SPRT, e un gate che dipende da un binario esterno da scaricare è un gate fragile. Il runner espone il verdetto come **exit code** — 0 accettata, 1 respinta, 2 inconcludente — che è esattamente ciò che serve a un workflow per bloccare una patch senza che nessuno legga l'output.
+The one that holds regardless: an in-repository harness **is usable from CI**. From M3 onwards every
+patch must pass an SPRT, and a gate that depends on downloading an external binary is a fragile gate.
+The runner reports its verdict as an **exit code** — 0 accepted, 1 rejected, 2 inconclusive — which is
+exactly what a workflow needs in order to block a patch without a human reading the output.
 
-Il costo è avere scritto la statistica a mano, ed è lì che vanno i test: `SprtTest` e `EloEstimateTest` verificano i punti di ancoraggio noti della scala Elo (400 punti = dieci a uno), che il rapporto di verosimiglianza abbia il segno giusto, che un match di quattro partite non decida nulla, e che una varianza nulla non venga letta come evidenza infinita.
+The cost is having written the statistics by hand, and that is where the tests go: `SprtTest` and
+`EloEstimateTest` check the known anchor points of the Elo scale (400 points is ten to one), that the
+likelihood ratio has the right sign, that a four-game match decides nothing, and that a zero variance
+is not read as infinite evidence.
 
-Sul time control: il runner usa un **tempo fisso per mossa** invece di un orologio che scorre. È una scelta, non una scorciatoia: isola *cosa fa la ricerca col tempo che ha* da *quanto bene una versione divide l'orologio*. Sono due domande diverse e un orologio vero le misurerebbe insieme. Il time management si valuta separatamente, a M3.
+On time control: the runner gives a **fixed allowance per move** rather than running a clock. That is
+a choice, not a shortcut — it separates *what the search does with the time it gets* from *how well a
+version divides a clock*. Two different questions, and a real clock would measure them together.
 
-Sull'LLR: è la forma con approssimazione normale, con la varianza presa dalla ripartizione vittorie/patte/sconfitte **osservata** invece che assunta. Serve perché quella ripartizione è molto diversa tra due motori distanti cento Elo e due distanti cinque, e assumerla renderebbe il test troppo ottimista proprio nel caso in cui serve prudenza.
+On the LLR: it is the normal-approximation form, with the variance taken from the **observed**
+win/draw/loss split rather than assumed. That matters because the split is very different for two
+engines a hundred Elo apart and two engines five apart, and assuming it would make the test
+optimistic in exactly the case that calls for caution.
 
-### 1.3 nps — l'oracolo di performance
+### 1.3 nps — the performance oracle
 
-Benchmark JMH su un set fisso di ~30 posizioni, a profondità fissa. Serve a distinguere i due modi in cui una patch può fallire: *cerca peggio* (nps uguale, Elo giù) contro *cerca più lentamente* (nps giù). Sono bug diversi e senza questa metrica li confondi.
+The purpose is to separate the two ways a patch can fail: *searching worse* (same nps, Elo down)
+against *searching slower* (nps down). Different bugs, and without this metric they look identical.
 
-**Baseline di M0**, misurato dalla suite perft profonda: **36–55 milioni di nodi al secondo**, dove un nodo comprende generazione pseudo-legale, `makeMove`, verifica di legalità e `unmakeMove`. Circa 610 milioni di nodi in 12,6 secondi su tutti i 32 casi. Non è ancora l'nps della ricerca — non c'è ricerca — ma è il tetto contro cui misurarla, e conferma che la disciplina zero-allocazione di §3.3 sta pagando.
+A JMH benchmark over a fixed position set is still **planned**. What exists today is the perft suite,
+which serves the same purpose for move generation.
 
-### 1.4 L'invariante dell'accumulatore — l'oracolo dell'Atto II
+**M0 baseline**, from the deep perft run: **36–55 million nodes per second**, where a node covers
+pseudo-legal generation, `makeMove`, a legality check and `unmakeMove`. Roughly 610 million nodes in
+13 seconds across all 32 cases. It is not search nps — there was no search yet — but it is the
+ceiling the search gets measured against, and it confirms the zero-allocation discipline of §3.3 is
+paying.
 
-L'aggiornamento incrementale della NNUE deve dare **esattamente** lo stesso risultato del ricalcolo da zero, bit per bit. Questo è un test, non una speranza. Dettagli in §7.4.
+### 1.4 The accumulator invariant — the Act II oracle
+
+The NNUE's incremental update must produce **exactly** the same result as a full recomputation, bit
+for bit. That is a test, not a hope. Details in §7.4.
 
 ---
 
-## 2. Architettura
+## 2. Architecture
 
-### 2.1 Moduli
+### 2.1 Modules
 
-Maven multi-modulo, JDK 24.
+Maven multi-module, JDK 24.
 
-> **Scostamenti dalla prima stesura, registrati qui perché un design doc che non segue la realtà smette di essere utile.** La build era prevista in Gradle: è Maven, per scelta esplicita. E il target era JDK 25 LTS: è 24, la versione installata sulla macchina di sviluppo. Nessuna delle due cambia niente di sostanziale — la Vector API dell'Atto II è in incubator in entrambe.
+> **Deviations from the first draft.** The build was planned in Gradle; it is Maven, by explicit
+> choice. The target was JDK 25 LTS; it is 24, the version installed on the development machine.
+> Neither changes anything substantial — the Vector API of Act II is in incubator on both.
 
 ```
 ludus/
-├── ludus-core/      board, move gen, zobrist, FEN, move encoding
-├── ludus-eval/      interfaccia Evaluator + HCE (valutazione a mano)
-├── ludus-search/    alpha-beta, TT, ordering, time management
-├── ludus-nnue/      implementazione NNUE di Evaluator        [Atto II]
-├── ludus-uci/       protocollo UCI, entry point, fat jar
-└── ludus-tools/     perft runner, JMH, generatore dataset, self-play
+├── ludus-core/      board, move gen, zobrist, FEN, move encoding, SEE
+├── ludus-eval/      Evaluator interface + HCE (hand-crafted evaluation)
+├── ludus-search/    alpha-beta, transposition table, ordering, time management
+├── ludus-nnue/      NNUE implementation of Evaluator            [Act II]
+├── ludus-uci/       UCI protocol, entry point, shaded jar
+└── ludus-tools/     match runner, SPRT statistics, status page generator
 ```
 
-**Perché multi-modulo e non un solo progetto con package.** Non è ceremonia: i moduli hanno dipendenze *realmente diverse*. `ludus-nnue` richiede `--add-modules jdk.incubator.vector`; `ludus-tools` tira dentro JMH e roba di I/O che non deve finire nel jar spedito a Cute Chess. E soprattutto il grafo delle dipendenze rende il seam dell'Atto II **impossibile da violare per sbaglio**: `ludus-search` dipende da `ludus-eval` e non conosce l'esistenza di `ludus-nnue`. Se un giorno ti viene la tentazione di chiamare codice NNUE dalla ricerca, il compilatore ti fermerà. Con i package non ti fermerebbe nessuno.
+**Why multi-module rather than one project with packages.** Not ceremony: the modules have *genuinely
+different* dependencies. `ludus-nnue` will need `--add-modules jdk.incubator.vector`; `ludus-tools`
+pulls in tooling that must not end up in the jar handed to Cute Chess. Above all, the dependency
+graph makes the Act II seam **impossible to violate by accident**: `ludus-search` depends on
+`ludus-eval` and does not know `ludus-nnue` exists. The day somebody is tempted to call network code
+from the search, the compiler stops them. Packages would not.
 
-Il grafo è aciclico e a senso unico:
+The graph is acyclic and one-way:
 
 ```
 uci ──► search ──► eval ──► core
  │                   ▲
- └────► nnue ────────┘   (nnue implementa eval, search non lo sa)
+ └────► nnue ────────┘   (nnue implements eval; search never learns of it)
 ```
 
-`ludus-uci` è l'unico punto che sa quale `Evaluator` istanziare. È il *composition root*.
+`ludus-uci` is the only place that knows which `Evaluator` to instantiate. It is the composition root.
 
-### 2.2 Package base
+### 2.2 Base package
 
-`io.github.lorenzovicino.ludus.*` — reverse-domain corretto per un progetto ospitato su GitHub Pages.
+`io.github.lorenzovicino.ludus.*` — the correct reverse domain for a project hosted on GitHub Pages.
 
 ---
 
-## 3. Rappresentazione della posizione
+## 3. Position representation
 
-### 3.1 Bitboard
+### 3.1 Bitboards
 
 ```java
 long[] byType   = new long[6];  // PAWN, KNIGHT, BISHOP, ROOK, QUEEN, KING
 long[] byColor  = new long[2];  // WHITE, BLACK
-long   occupied;                // derivato, mantenuto per non ricalcolarlo
+long   occupied;                // derived, kept so it is not recomputed
 ```
 
-**Scelta: 6 + 2 invece di 12 bitboard separati.** Occupa meno cache (8 long contro 12) al prezzo di un `AND` in più per ottenere "cavalli bianchi". La ricerca è dominata dai cache miss, non dalle ALU, quindi il compromesso è nella direzione giusta.
+**Six plus two rather than twelve separate bitboards.** Less cache occupied (8 longs against 12) at
+the price of one extra `AND` to ask for "white knights". The search is dominated by cache misses, not
+by ALU work, so the trade runs in the right direction.
 
-Stato aggiuntivo:
+Additional state:
 
 ```java
 int  sideToMove;
-int  castlingRights;   // 4 bit: WK, WQ, BK, BQ
-int  epSquare;         // -1 se assente
-int  halfmoveClock;    // per la regola delle 50 mosse
-long zobrist;          // mantenuto incrementalmente
+int  castlingRights;   // 4 bits: WK, WQ, BK, BQ
+int  epSquare;         // -1 when absent
+int  halfmoveClock;    // for the fifty-move rule
+long zobrist;          // maintained incrementally
 ```
 
 ### 3.2 Zobrist hashing
 
-Chiavi casuali con seed **fisso e hardcoded**: la riproducibilità è indispensabile per debuggare (un bug che dipende da chiavi casuali diverse a ogni run è un incubo).
+Random keys from a **fixed, hardcoded seed**: reproducibility is indispensable for debugging, and a
+bug that depends on different keys each run is a nightmare.
 
-Aggiornamento incrementale in `makeMove`/`unmakeMove`. Componenti da ricordare: pezzo×casa, diritti di arrocco, casa di en passant, turno. Le prime due dimenticanze classiche sono i diritti di arrocco che decadono e la casa di en passant che scade — entrambe producono collisioni sottili nella TT che si manifestano come mosse assurde una volta ogni diecimila partite.
+Updated incrementally in `makeMove`/`unmakeMove`. The components to remember: piece×square, castling
+rights, en passant square, side to move. The two classic omissions are rights that lapse and an en
+passant square that expires — both produce subtle table collisions that surface as an absurd move
+once every ten thousand games.
 
-### 3.3 make / unmake, non copy-make
+### 3.3 Make/unmake, not copy-make
 
-`Board` è **mutabile**, con uno stack di `UndoInfo` (pezzo catturato, diritti di arrocco precedenti, casa ep precedente, halfmove clock precedente, zobrist precedente).
+`Board` is **mutable**, with a stack of undo information: captured piece, previous castling rights,
+previous en passant square, previous halfmove clock, previous hash.
 
-**Perché make/unmake e non copiare la posizione.** Copy-make è più semplice e immune a una classe intera di bug, ma alloca a ogni nodo. In Java questo significa pressione sull'allocatore in un ciclo che gira dieci milioni di volte al secondo: anche con TLAB e un GC generazionale, è il tipo di codice che passa il tempo in `System.gc` invece che a cercare. Make/unmake è la scelta giusta, e §8.2 descrive il test che la rende sicura.
+**Why not copy the position.** Copy-make is simpler and immune to a whole class of bug, but it
+allocates at every node — in a loop that runs ten million times a second. Even with TLABs and a
+generational collector, that is the kind of code that spends its time in the allocator instead of
+searching. Make/unmake is the right choice, and §8.2 describes the test that makes it safe.
 
-**Disciplina zero-allocazione nella ricerca.** Regola non negoziabile per il codice sotto `search` e `eval`:
+**Zero-allocation discipline in the search.** Non-negotiable for code under `search` and `eval`:
 
-- Nessun `new` nel percorso caldo. Mai.
-- Le liste di mosse sono `int[]` preallocati, uno per ply, in un array bidimensionale indicizzato dalla profondità.
-- Nessun oggetto `Move`, nessun `Optional`, nessuno stream, nessun boxing. Niente lambda che catturano.
-- Verifica, non fiducia: profila con JFR e conferma che l'allocation rate durante una ricerca lunga sia **piatto**. Se non lo è, hai un `new` nascosto e va trovato.
+- No `new` on the hot path. Ever.
+- Move lists are preallocated `int[]`, one per ply, in a two-dimensional array indexed by depth.
+- No `Move` objects, no `Optional`, no streams, no boxing. No capturing lambdas.
+- Verify rather than trust: profile with JFR and confirm the allocation rate during a long search is
+  **flat**. If it is not, there is a hidden `new` and it needs finding.
 
-Questa è una delle parti più interessanti da raccontare nel README: *cosa cambia a scrivere codice ad alte prestazioni sulla JVM invece che in C++*. È contenuto originale, non un riassunto di CPW.
+This is one of the more interesting things to write about: *what changes when you write
+high-performance code on the JVM instead of in C++*. Original content, not a summary of the wiki.
 
-### 3.4 Codifica delle mosse
+### 3.4 Move encoding
 
-Una mossa è un **`int`**, non un oggetto:
+A move is an **`int`**, not an object:
 
 ```
-bit  0-5   from square
-bit  6-11  to square
-bit 12-15  flags
+bits  0-5   from square
+bits  6-11  to square
+bits 12-15  flags
 ```
 
-I 4 bit di flag seguono la codifica standard CPW: quiet, double pawn push, arrocco corto, arrocco lungo, cattura, cattura en passant, e le quattro promozioni × {con cattura, senza}. Stanno in 16 bit; usiamo un `int` perché sulla JVM non guadagni nulla a usare `short` e perdi in conversioni implicite.
+The four flag bits follow the conventional encoding: quiet, double pawn push, kingside castle,
+queenside castle, capture, en passant capture, and the four promotions × {capturing, not}. Two of the
+bits carry meaning directly — bit 2 marks a capture and bit 3 a promotion — so both questions are
+answered without a lookup table, and the promoted type is `KNIGHT + (flags & 3)`.
 
-Lo `0` non è una mossa valida (from == to == 0), quindi funziona come sentinella "nessuna mossa" senza bisogno di un valore speciale.
+Zero is not a valid move, since `from == to == 0`, so it doubles as the "no move" sentinel without
+needing a special value.
 
 ---
 
 ## 4. Move generation
 
-### 4.1 Attacchi
+### 4.1 Attacks
 
-- **Cavallo, re, pedone**: tabelle precalcolate, `long[64]`. Banale.
-- **Alfiere, torre, donna**: **magic bitboard**. Tabelle di attacco indicizzate da `(occupancy & mask) * magic >>> shift`.
+- **Knight, king, pawn**: precomputed `long[64]` tables. Trivial.
+- **Bishop, rook, queen**: **magic bitboards**, indexed by `(occupancy & mask) * magic >>> shift`.
 
-Nota per chi arriva dal C++: l'istruzione `PEXT` di BMI2, che è la via moderna e più semplice, **non è raggiungibile da Java** in modo portabile. Le magic sono l'unica strada.
+A note for anyone arriving from C++: BMI2's `PEXT`, the modern and simpler route, is **not reachable
+from Java** portably. Magics are the only road.
 
-**Scostamento, e il ragionamento che l'ha causato.** Questa sezione diceva di usare magic già pubblicate invece di cercarle a runtime. L'implementazione le cerca, con seed fisso, e il motivo è che una magic sbagliata **non fallisce in modo rumoroso**: restituisce in silenzio l'attacco corretto per l'occupancy sbagliata, e il sintomo emerge come una mossa impossibile mille nodi più tardi. Trascrivere a mano 128 costanti da 64 bit è esattamente il compito in cui una cifra sbagliata sopravvive alla revisione.
+**Deviation, and the reasoning behind it.** This section originally said to use published magic
+numbers rather than searching for them at runtime. The implementation searches, with a fixed seed,
+because a wrong magic **does not fail loudly**: it silently returns the correct attack set for the
+wrong occupancy, and the symptom emerges as an impossible move a thousand nodes later. Transcribing
+128 sixty-four-bit constants by hand is exactly the task where one wrong digit survives review.
 
-Una ricerca non può commettere quell'errore, perché **verifica** ogni candidata contro l'implementazione di riferimento per tutte le occupancy prima di accettarla: le tabelle sono corrette per costruzione invece che per trascrizione. Il costo è qualche decina di millisecondi all'avvio, pagato una volta; se un giorno dovesse pesare, le magic trovate si possono stampare e fissare. I seed fissi rendono la ricerca deterministica, quindi ogni run di ogni build produce tabelle identiche byte per byte.
+A search cannot make that mistake, because it **verifies** each candidate against the reference
+implementation for every occupancy before accepting it. The tables are correct by construction rather
+than by transcription. The cost is tens of milliseconds at startup, paid once; if it ever matters, the
+found magics can be printed and pinned. Fixed seeds make the search deterministic, so every run of
+every build produces byte-identical tables.
 
-È il principio di §4.2 applicato un livello più in basso: il codice lento e ovviamente corretto esiste per validare quello veloce.
+It is the principle of §4.2 applied one level down: the slow, obviously correct code exists to
+validate the fast code.
 
-### 4.2 Strategia in due tempi (deliberata)
+### 4.2 A two-stage strategy, deliberately
 
-**Tempo 1 — pseudo-legale + filtro.** Genera tutte le mosse ignorando gli scacchi, poi per ciascuna fai `makeMove`, controlli se il tuo re è attaccato, e `unmakeMove`. Lento ma **quasi impossibile da sbagliare**.
+**Stage one — pseudo-legal plus a filter.** Generate every move ignoring checks, then for each one
+`makeMove`, ask whether your own king is attacked, and `unmakeMove`. Slow, and **very hard to get
+wrong**.
 
-**Tempo 2 — generazione legale diretta.** Maschere di pin, maschera di check, gestione separata del doppio scacco. Molto più veloce, molto più facile da sbagliare.
+**Stage two — direct legal generation.** Pin masks, a check mask, double check handled separately.
+Much faster, much easier to get wrong.
 
-**Perché in questo ordine e non direttamente il tempo 2.** Perché il tempo 1 ti dà un perft corretto in mezza giornata, e quel perft corretto diventa **l'oracolo con cui validi il tempo 2**. Se parti dalla generazione legale non hai niente contro cui confrontarti e passerai una settimana a caccia di un bug in `d5`. Questo è il singolo consiglio più importante del documento: *lo scopo del codice lento è validare il codice veloce.*
+**Why this order.** Stage one gives a correct perft in half a day, and that correct perft becomes
+**the oracle against which stage two is validated**. Starting from legal generation leaves nothing to
+compare against, and a week hunting a discrepancy at depth 5. This is the single most important piece
+of advice in the document: *the purpose of the slow code is to validate the fast code.*
 
-### 4.3 Checklist dei casi che rompono tutti
+Stage two has not been written yet. See §9.0 for why it moved to M5.
 
-Da coprire con test unitari dedicati, oltre al perft:
+### 4.3 The cases that break everybody
 
-- Arrocco: casa d'arrivo attaccata, casa di transito attaccata, re già sotto scacco, torre già mossa, torre catturata sulla sua casa iniziale.
-- **En passant che scopre uno scacco** sulla quinta traversa — il classico assassino del perft, perché la cattura rimuove *due* pedoni da traverse diverse.
-- En passant che sarebbe legale ma il pedone catturante è inchiodato.
-- Promozione con cattura, e promozione a pezzo minore (un motore che promuove sempre a donna perde patte per stallo).
-- Doppio scacco: solo mosse di re, nessuna interposizione e nessuna cattura del pezzo che dà scacco.
+Covered by dedicated unit tests as well as by perft:
+
+- Castling: destination attacked, transit square attacked, king already in check, rook already moved,
+  rook captured on its home square.
+- **En passant that uncovers a check** along the fifth rank — the classic perft killer, because the
+  capture removes *two* pawns from different ranks at once.
+- En passant that would be legal but the capturing pawn is pinned.
+- Capturing promotions, and underpromotion — an engine that always promotes to a queen throws away
+  games to stalemate.
+- Double check: king moves only, no interposition and no capture of a checker.
 
 ---
 
 ## 5. Search
 
-### 5.1 Struttura
+### 5.1 Structure
 
-Negamax alpha-beta con **PVS** (principal variation search), dentro un **iterative deepening** con finestre di aspirazione.
+Negamax alpha-beta with **PVS** (principal variation search), inside **iterative deepening**.
 
-L'iterative deepening non è uno spreco anche se rifà lavoro: la ricerca a profondità `d-1` popola la TT e produce l'ordinamento che rende la profondità `d` drasticamente più veloce. È anche ciò che rende possibile il time management — puoi fermarti a metà e avere comunque una mossa buona.
+Iterative deepening is not wasted work despite re-searching: the search at depth `d-1` fills the
+transposition table and produces the ordering that makes depth `d` dramatically faster. It is also
+what makes time management possible — you can stop partway and still have a good move.
+
+Aspiration windows are **planned, not implemented**.
 
 ### 5.2 Quiescence search
 
-Alla profondità 0 non valutare subito: continua a cercare solo catture e promozioni fino a una posizione "quieta". Senza questo il motore ha l'*horizon effect* ed è tatticamente cieco — è il singolo pezzo che vale più Elo di tutti.
+At depth zero, do not evaluate immediately: keep searching captures and promotions until the position
+is quiet. Without it the engine suffers the *horizon effect* and is tactically blind — the single
+piece worth more Elo than any other.
 
-Include `stand pat` (se la valutazione statica già batte beta, taglia) e potatura delta.
+Includes stand pat (if the static score already beats beta, cut) and **SEE pruning**: a capture that
+loses material cannot improve a quiet position, and searching it invites an endless chain of bad
+trades. Evasions are exempt, since a side in check may have no better option.
+
+Delta pruning, named in the first draft, was not implemented; SEE pruning does the same job here.
 
 ### 5.3 Transposition table
 
-Il layout è una scelta Java-specifica che vale la pena spiegare nel README:
+The layout is a Java-specific choice worth explaining:
 
 ```java
-long[] keys;   // 32 bit alti dello zobrist + metadati
-long[] data;   // move | score | depth | bound | age, impacchettati
+long[] keys;   // the full Zobrist key
+long[] data;   // move | score | depth | bound | age, packed
 ```
 
-**Due array paralleli di primitivi, non un array di oggetti `TTEntry`.** Un `TTEntry[]` in Java è un array di *puntatori*: ogni lookup è due cache miss invece di uno, più 16 byte di header per entry. Con una tabella da 256 MB la differenza è enorme. Questo è esattamente il tipo di dettaglio che il layout della memoria in Java ti costringe a considerare e che in C++ ottieni gratis con uno `struct`.
+**Two parallel arrays of primitives, not an array of `TTEntry` objects.** A `TTEntry[]` in Java is an
+array of *references*: every lookup costs two cache misses instead of one, plus 16 bytes of header per
+entry. On a 256 MB table the difference is enormous, on the hottest lookup in the engine. This is
+exactly the kind of detail Java's memory layout forces you to consider and that a C++ `struct` gives
+you for free.
 
-Attenzioni:
+Points of care:
 
-- Dimensione potenza di 2, indice per mascheratura. Configurabile via UCI `setoption name Hash`.
-- Politica di rimpiazzo: preferisci profondità maggiore, ma con **age** in modo che le entry di ricerche precedenti cedano il posto.
-- **Punteggi di matto relativi al ply.** Un matto salvato come "matto in 3 dal nodo corrente" letto da un altro ply diventa un punteggio sbagliato. Aggiusta in scrittura e in lettura. È un bug classico e si manifesta come un motore che annuncia matti che non esistono.
-- Una entry non basta per la ripetizione: la patta per ripetizione dipende dal *percorso*, non dalla posizione. Serve uno stack separato di chiavi zobrist.
+- Power-of-two size, indexed by masking. Configurable through UCI `setoption name Hash`.
+- Replacement policy: prefer greater depth, with an **age** so entries from earlier searches give way.
+  Note what is deliberately absent — a clause letting a matching key always win. It is the obvious
+  thing to write and it is wrong: a depth-2 result would evict a depth-10 answer for the same
+  position. Depth decides, whatever the key says. A test catches this.
+- **Mate scores relative to the node.** A mate stored as "mate in 3 from here" and read at a different
+  ply becomes a wrong score. Convert on the way in and back on the way out. This is a classic bug and
+  it surfaces as an engine announcing mates that do not exist.
+- One entry is not enough for repetition: a draw by repetition depends on the *path*, not the
+  position. A separate stack of hashes is required, and it is consulted **before** the table.
 
 ### 5.4 Move ordering
 
-L'ordinamento vale più di quasi ogni altra ottimizzazione: alpha-beta ideale visita `√N` nodi invece di `N`, ma solo se le mosse migliori arrivano per prime.
+Ordering is worth more than almost any other optimisation: ideal alpha-beta visits `√N` nodes instead
+of `N`, but only if the best moves come first.
 
-Ordine: mossa dalla TT → catture buone per SEE → promozioni → killer moves → history heuristic → resto.
+Order: table move → good captures by SEE → promotions → killer moves → history heuristic → the rest.
 
-**SEE** (static exchange evaluation) merita la sua implementazione pulita e i suoi test unitari: serve sia per l'ordinamento sia per la potatura in quiescence, ed è un pezzo di codice sottile.
+**SEE** (static exchange evaluation) earns its own clean implementation and its own unit tests: it
+serves both ordering and quiescence pruning, and it is subtle code.
 
-### 5.5 Potature e riduzioni — una per volta
+### 5.5 Pruning and reductions — one at a time
 
-Null move pruning, late move reductions, futility pruning, reverse futility. Ognuna vale Elo, ognuna può nascondere un bug che perde partite in casi rari (lo zugzwang per il null move, ad esempio).
+**Landed and measured:** null move pruning, late move reductions. **Next:** futility pruning, reverse
+futility.
 
-**Regola: una patch per volta, ognuna col suo SPRT.** Se ne aggiungi tre insieme e l'Elo scende, non sai quale. Questo è il punto in cui la disciplina di §1.2 ripaga il costo di averla costruita.
+**The rule: one patch at a time, each with its own SPRT.** Add three together and watch the Elo drop,
+and you do not know which one did it. This is where the discipline of §1.2 repays the cost of having
+built it — see §9.0, where the very first patch measured at nothing and the reason was worth more than
+the patch would have been.
 
 ### 5.6 Time management
 
-Da `go wtime btime winc binc movestogo`: calcola un budget *soft* (dopo il quale non inizi una nuova iterazione) e uno *hard* (oltre il quale abortisci comunque). Controlla il tempo ogni ~2048 nodi, non a ogni nodo: `System.nanoTime()` in un ciclo caldo costa più di quanto pensi.
+From `go wtime btime winc binc movestogo`: compute a *soft* budget, past which no new iteration starts,
+and a *hard* one, past which the search aborts outright. Check the clock every few thousand nodes
+rather than at every node — `System.nanoTime()` in a hot loop costs more than you would think.
 
-### 5.7 Nota sul polimorfismo di `Evaluator`
+### 5.7 A note on `Evaluator` polymorphism
 
-`Evaluator` è un'interfaccia chiamata milioni di volte al secondo, e in Java questo solleva una domanda legittima: **il call site diventa megamorfico e la JIT smette di inlinare?**
+`Evaluator` is an interface called millions of times per second, which raises a fair question in Java:
+**does the call site become megamorphic and stop being inlined?**
 
-No, e vale la pena capire perché. Un solo run del motore carica *una sola* implementazione — o HCE o NNUE, scelta all'avvio. La JIT osserva un call site monomorfico e inlina normalmente. Il rischio esiste solo se caricassi entrambe nello stesso processo, e succede in un posto preciso: **i test comparativi**. Lì l'inlining non ci interessa.
+No, and the reason is worth understanding. A single run of the engine loads exactly *one*
+implementation — HCE or NNUE, chosen at startup. The JIT sees a monomorphic call site and inlines
+normally. The risk exists only if both were loaded in one process, which happens in exactly one place:
+comparative tests, where inlining does not matter.
 
-Prevenzione: `final` sulle classi di implementazione, e un flag `-XX:+PrintInlining` da controllare una volta per confermare che l'inlining avvenga davvero. Verificare invece di assumere è tutto il punto.
+Prevention: `final` on the implementation classes, and one pass with `-XX:+PrintInlining` to confirm
+inlining actually happens. Verifying instead of assuming is the whole point.
 
 ---
 
-## 6. Il seam della valutazione
+## 6. The evaluation seam
 
-**Questa è la decisione architetturale più importante del documento.** È ciò che rende l'Atto II un innesto invece di una riscrittura, e va presa il primo giorno, quando non serve ancora a niente.
+**This is the most important architectural decision in the document.** It is what makes Act II a graft
+rather than a rewrite, and it has to be taken on day one, when it is not yet useful for anything.
 
 ```java
 public interface Evaluator {
 
-    /** Valutazione in centipawn, dal punto di vista del giocatore di turno. */
+    /** Centipawns from the point of view of the side to move. */
     int evaluate(Board board);
 
-    /** Chiamato con la board nella posizione PRE-mossa, prima che la mossa venga applicata. */
+    /** Called with the board in its PRE-move position, before the move is applied. */
     default void beforeMakeMove(Board board, int move) {}
 
-    /** Chiamato con la board tornata alla posizione PRE-mossa, dopo l'annullamento. */
+    /** Called with the board back in its PRE-move position, after the move was undone. */
     default void afterUnmakeMove(Board board, int move) {}
 
-    /** Scarta lo stato incrementale e lo ricostruisce dalla board. */
+    /** Discards incremental state and rebuilds it from the board. */
     default void reset(Board board) {}
 }
 ```
 
-**Scostamento, scoperto implementando.** La prima stesura aveva `onMakeMove` chiamato **dopo** l'applicazione della mossa. Non funziona: a mossa applicata il pezzo catturato **non è più sulla board**, e la sua identità e la sua casa sono esattamente ciò che serve al delta delle feature. Leggere la posizione *prima* rende visibili tutti i pezzi coinvolti — quello che muove, la vittima, la torre dell'arrocco — senza chiedere niente in più alla `Board`.
+**Deviation, found while implementing.** The first draft had the make hook firing **after** the move
+was applied. That does not work: once the move is on the board the captured piece is **gone**, and its
+identity and square are exactly what a feature delta needs. Reading the position *before* makes every
+piece involved plainly visible — the mover, the victim, the castling rook — without asking anything
+more of `Board`.
 
-I nomi sono cambiati di conseguenza: `beforeMakeMove` e `afterUnmakeMove` **portano il contratto addosso**, invece di affidarlo a un commento che qualcuno dovrà ricordare. Entrambi vedono la posizione pre-mossa, quindi la coppia è simmetrica.
+The names changed accordingly. `beforeMakeMove` and `afterUnmakeMove` **carry the contract**, instead
+of entrusting it to a comment somebody has to remember. Both see the pre-move position, so the pair is
+symmetric.
 
-`reset` si è aggiunto per una ragione pratica emersa con l'UCI: un host può consegnare al motore una posizione che non ha niente a che vedere con la precedente, e a quel punto un accumulatore incrementale va ricostruito da zero.
+`reset` was added for a practical reason that surfaced with UCI: a host can hand the engine a position
+unrelated to the previous one, and at that point an incremental accumulator must be rebuilt from
+scratch.
 
-Un ultimo dettaglio che l'implementazione ha fissato: la ricerca chiama gli hook attorno a **ogni** mossa che prova, comprese quelle che si rivelano illegali e vengono subito annullate. L'accoppiamento è quindi sempre bilanciato, ed è su questo che si appoggia un'implementazione che fa push e pop di uno stack.
+One last detail the implementation settled: the search calls the hooks around **every** move it tries,
+including ones that turn out illegal and are immediately unmade. The pairing is therefore always
+balanced, which is what an implementation pushing and popping a stack relies on. Null moves do not
+call them — the accumulator is per-perspective and a side-to-move flip changes nothing, since the
+perspectives are concatenated in side-to-move order at evaluation time.
 
-Gli hook `default` sono l'intera partita. `HandCraftedEvaluator` li ignora — non ha stato, calcola tutto da zero a ogni chiamata. `NnueEvaluator` li userà per mantenere il proprio accumulatore incrementale.
+The `default` hooks are the whole game. `HandCraftedEvaluator` ignores them; it holds no state and
+derives everything from the position in front of it. `NnueEvaluator` will use them to keep its
+accumulator up to date.
 
-Senza questi hook, l'Atto II ti costringerebbe a mettere le mani in `makeMove` e in ogni ramo della ricerca. Con loro, `ludus-uci` cambia una riga:
+Without them, Act II would mean editing `makeMove` and every branch of the search. With them,
+`ludus-uci` changes one line:
 
 ```java
 Evaluator eval = nnuePath != null
@@ -313,263 +446,411 @@ Evaluator eval = nnuePath != null
     : new HandCraftedEvaluator();
 ```
 
-Sui pattern, con onestà: è **Strategy**, e gli hook hanno un sapore di **Observer**. Non è una scoperta né va venduta come tale nel README — quello che vale la pena scrivere è *perché il confine sta esattamente lì* e non due strati più su o più giù. Un lettore competente apprezza il ragionamento sul confine; l'etichetta del pattern la sa già.
+On patterns, honestly: it is **Strategy**, and the hooks have a flavour of **Observer**. That is not a
+discovery and should not be sold as one. What is worth writing down is *why the boundary sits exactly
+there* and not two layers up or down. A competent reader appreciates the reasoning about the boundary;
+they already know the label.
 
-### 6.1 HCE — la valutazione a mano
+### 6.1 HCE — the hand-crafted evaluation
 
-Volutamente modesta, perché è destinata a essere buttata: materiale, tabelle pezzo-casa interpolate tra mediogioco e finale, struttura dei pedoni (doppiati, isolati, passati), mobilità, sicurezza del re, coppia di alfieri.
+Deliberately modest, because it is destined for the bin: material, piece-square tables interpolated
+between midgame and endgame, pawn structure (doubled, isolated, passed), bishop pair.
 
-**Cosa è effettivamente atterrato in M1**, e cosa no. Ci sono materiale, PSQT tapered, struttura dei pedoni e coppia di alfieri. **Mobilità e sicurezza del re non ci sono**, ed è coerente con il paragrafo qui sotto: sono i due termini più costosi da scrivere e da tarare, e su materiale destinato al cestino non valgono il prezzo.
+**What actually landed in M1, and what did not.** Material, tapered piece-square tables, pawn
+structure and the bishop pair are there. **Mobility and king safety are not**, which is consistent
+with the paragraph below: they are the two most expensive terms to write and to tune, and on material
+headed for the bin they are not worth the price.
 
-Una semplificazione ulteriore, dichiarata: solo **pedone e re** hanno due tabelle distinte per mediogioco e finale. Cavalli, alfieri, torri e donne ne condividono una sola tra le due fasi, perché le loro case migliori cambiano poco — mentre per il pedone e per il re la fase cambia davvero la risposta, ed è lì che l'interpolazione serve. Inventare un secondo set di numeri non tarati avrebbe aggiunto codice senza aggiungere informazione.
+A further declared simplification: only the **pawn and the king** have separate midgame and endgame
+tables. Knights, bishops, rooks and queens share one across both phases, because their best squares
+barely move — whereas for the pawn and the king the phase genuinely changes the answer, and that is
+where interpolation earns its keep. Inventing a second set of untuned numbers would have added code
+without adding information.
 
-Il test che tiene tutto questo insieme è la **simmetria di colore**: specchiare una posizione — ribaltare le traverse, scambiare i colori, passare la mossa — deve dare lo stesso punteggio. È una sola proprietà e cattura i due errori più facili da fare e più difficili da notare: un segno invertito in un termine, e una tabella pezzo-casa indicizzata senza mirroring per il nero. Entrambi lasciano il motore silenziosamente convinto che un colore stia meglio.
+The test holding all of it together is **colour symmetry**: mirroring a position — flipping the ranks,
+swapping the colours, handing over the move — must produce the same score. One property, and it
+catches the two mistakes that are easiest to make and hardest to notice: a sign flipped in one term,
+and a piece-square table indexed without mirroring for Black. Both leave the engine quietly convinced
+that one colour is better.
 
-**Non spendere settimane a fare tuning di HCE.** Serve a due cose: dare all'Atto I un avversario onesto e stabilire il *baseline Elo* contro cui misurerai la NNUE. Se la ottimizzi troppo, l'unico effetto è rendere meno impressionante il numero dell'Atto II.
+**Do not spend weeks tuning HCE.** It serves two purposes: giving Act I an honest opponent, and
+establishing the *Elo baseline* the NNUE will be measured against. Over-tuning it only makes the Act
+II number less impressive.
 
 ---
 
-## 7. Atto II — NNUE
+## 7. Act II — NNUE
 
-### 7.1 Architettura della rete
+### 7.1 Network architecture
 
 ```
-input: 768 feature (64 case × 6 tipi × 2 colori), sparse
+input: 768 features (64 squares × 6 types × 2 colours), sparse
    │
-   ├── prospettiva bianca ──► feature transformer  768 → 256
-   └── prospettiva nera   ──► (stessi pesi)        768 → 256
+   ├── white perspective ──► feature transformer  768 → 256
+   └── black perspective ──► (same weights)       768 → 256
                                     │
-                          concat ordinato dal turno → 512
+                    concatenated in side-to-move order → 512
                                     │
                               clipped ReLU
                                     │
                                512 → 32 → 32 → 1
 ```
 
-**Perché 768 feature e non `halfKP`.** L'`halfKP` di Stockfish ha ~41 000 feature (posizione del re × pezzo × casa) e va molto meglio, ma richiede molti più dati per allenarsi e molta più cura. Un input `768` denso-di-informazione è la scelta giusta per la prima rete: si allena con dati modesti, funziona, e ti dà il numero. `halfKP` è l'ovvia iterazione successiva, ed è meglio averla come *miglioramento misurato* che come rischio iniziale.
+**Why 768 features and not `halfKP`.** Stockfish's `halfKP` has roughly 41,000 features (king position
+× piece × square) and performs far better, but it needs much more data to train and much more care. A
+dense 768-input is the right choice for a first network: it trains on modest data, it works, and it
+gives you the number. `halfKP` is the obvious next iteration, and it is better held as a *measured
+improvement* than as an opening risk.
 
-Il **concat ordinato dal turno** (prima la prospettiva di chi muove) è ciò che rende la rete simmetrica: impara "chi muove sta meglio", non "il bianco sta meglio".
+The **side-to-move ordered concatenation** is what makes the network symmetric: it learns "the side to
+move is better off", not "White is better off".
 
-### 7.2 Accumulatore incrementale
+### 7.2 The incremental accumulator
 
-È il cuore della sigla: la **E** di NNUE sta per *efficiently updatable*, e l'efficienza è tutta qui.
+This is the heart of the acronym: the **E** in NNUE stands for *efficiently updatable*, and the
+efficiency is all here.
 
-Il feature transformer è la parte costosa (768 → 256, due volte). Ma tra un nodo e il figlio cambiano **pochissime feature**: una mossa normale rimuove il pezzo dalla casa di partenza e lo aggiunge a quella d'arrivo. Due colonne di pesi su 768. Quindi non ricalcoli: sommi e sottrai.
+The feature transformer is the expensive part (768 → 256, twice). But between a node and its child
+**very few features change**: an ordinary move removes the piece from its origin and adds it at its
+destination. Two columns of weights out of 768. So you do not recompute — you add and subtract.
 
 ```
-mossa normale       →  −(pezzo, from)  +(pezzo, to)
-cattura             →  ... e −(pezzo catturato, to)
-promozione          →  −(pedone, from) +(pezzo promosso, to)
-arrocco             →  quattro aggiornamenti (re + torre)
-en passant          →  −(pedone catturato, casa NON di arrivo)   ← attenzione
-mossa di re         →  ricalcolo completo di quella prospettiva, se usi halfKP
+ordinary move   →  −(piece, from)  +(piece, to)
+capture         →  … and −(captured piece, to)
+promotion       →  −(pawn, from)   +(promoted piece, to)
+castling        →  four updates (king and rook)
+en passant      →  −(captured pawn, the square that is NOT the destination)   ← careful
+king move       →  full recomputation of that perspective, if using halfKP
 ```
 
-Implementazione: uno stack di accumulatori indicizzato dal ply. `onMakeMove` copia dal livello precedente e applica il delta; `onUnmakeMove` fa semplicemente `ply--` — l'annullamento è gratis, che è metà del motivo per cui questo schema funziona.
+Implementation: a stack of accumulators indexed by ply. `beforeMakeMove` copies from the level below
+and applies the delta; `afterUnmakeMove` simply decrements — undoing is free, which is half the reason
+the scheme works.
 
-L'en passant è di nuovo il caso che rompe tutto: il pedone catturato **non è sulla casa di arrivo**, ed è l'errore che farai.
+En passant is again the case that breaks everything: the captured pawn **is not on the destination
+square**, and that is the mistake you will make.
 
-### 7.3 Quantizzazione
+### 7.3 Quantisation
 
-L'inferenza gira a interi, non a float. È ciò che la rende abbastanza veloce da stare in una ricerca.
+Inference runs on integers, not floats. That is what makes it fast enough to sit inside a search.
 
-- Pesi e accumulatore del feature transformer: **int16**.
-- Clipped ReLU: satura a `[0, 127]`, output **int8**.
-- Pesi degli strati densi: **int8**, accumulo in **int32**.
-- Fattori di scala scelti in modo che l'output finale sia in centipawn.
+- Feature transformer weights and accumulator: **int16**.
+- Clipped ReLU: saturates to `[0, 127]`, output **int8**.
+- Dense layer weights: **int8**, accumulating into **int32**.
+- Scale factors chosen so the final output is in centipawns.
 
-Il training è in float; la quantizzazione è un passo di export. Questo introduce una discrepanza controllata tra rete allenata e rete eseguita — che è precisamente ciò che il test di §7.4b misura.
+Training is in float; quantisation is an export step. That introduces a controlled discrepancy between
+the trained network and the executed one — which is precisely what the test in §7.4(b) measures.
 
-**Vector API** (`jdk.incubator.vector`) per i prodotti dell'accumulatore e degli strati densi, con un percorso scalare di fallback. Due ragioni: è dove sta il guadagno di performance, ed è un pezzo di Java moderno che quasi nessun portfolio mostra. Tieni il fallback scalare *funzionante e testato*, non solo presente: è il tuo riferimento di correttezza per la versione vettoriale.
+**Vector API** (`jdk.incubator.vector`) for the accumulator and dense-layer products, with a scalar
+fallback path. Two reasons: it is where the performance is, and it is a piece of modern Java almost no
+portfolio shows. Keep the scalar fallback *working and tested*, not merely present — it is the
+correctness reference for the vectorised version.
 
-### 7.4 Verifica — tre livelli
+### 7.4 Verification — three levels
 
-**(a) L'invariante dell'accumulatore.** Il più importante.
+**(a) The accumulator invariant.** The most important.
 
-> Per ogni posizione raggiunta durante una partita casuale, l'accumulatore mantenuto incrementalmente deve essere **identico bit per bit** a un ricalcolo da zero.
+> At every position reached during a random game, the incrementally maintained accumulator must be
+> **identical bit for bit** to a full recomputation.
 
-Property test con jqwik: genera migliaia di partite casuali, a ogni nodo confronta. Un bug qui non fa crashare niente — fa solo giocare peggio il motore, in modo silenzioso e inspiegabile. Senza questo test lo cercheresti per settimane.
+A property test over thousands of random games with a fixed seed, comparing at every node. A bug here
+crashes nothing — it just makes the engine play worse, silently and inexplicably. Without this test you
+would hunt it for weeks.
 
-**(b) Java contro PyTorch.** Su un set di posizioni fisso, l'inferenza Java quantizzata e l'inferenza PyTorch in float devono coincidere entro la tolleranza di quantizzazione. Cattura gli errori di export: pesi trasposti, scale sbagliate, ordine dei layer invertito.
+**(b) Java against PyTorch.** Over a fixed position set, quantised Java inference and float PyTorch
+inference must agree within the quantisation tolerance. This catches export errors: transposed
+weights, wrong scales, layers in the wrong order.
 
-**(c) SPRT, HCE contro NNUE.** Il numero finale, quello che va nel README.
+**(c) SPRT, HCE against NNUE.** The final number, the one that goes in the README.
 
 ### 7.5 Training
 
-**In PyTorch, non in Java.** È la scelta pragmatica e non è una resa: il training è un processo iterativo che vive di ecosistema (dataloader, ottimizzatori, tensorboard), e riscriverlo sarebbe un secondo progetto travestito da primo. L'inferenza in Java è la parte che conta e la parte difficile.
+**In PyTorch, not in Java.** The pragmatic choice, and not a surrender: training is an iterative
+process that lives on its ecosystem — dataloaders, optimisers, tensorboard — and rewriting that would
+be a second project disguised as the first. Inference in Java is the part that counts and the part
+that is hard.
 
-**Dati.** Posizioni etichettate con il punteggio di una ricerca a profondità bassa-media del tuo stesso motore in self-play, più il risultato finale della partita. La loss interpola tra i due (`lambda` tra valutazione e WDL): la valutazione insegna la tattica, il risultato insegna cosa conta davvero. Formato: `.binpack` o un formato tuo semplice, purché lo streaming sia veloce.
+**Data.** Positions labelled with the score from a shallow-to-medium search by the engine itself in
+self-play, plus the final result of the game. The loss interpolates between the two: the evaluation
+teaches tactics, the result teaches what actually matters.
 
-Parti da un dataset pubblico per la prima rete. Genera i tuoi dati solo dopo, quando hai la pipeline che funziona end-to-end — altrimenti debugghi training e generazione dati insieme, e non saprai cosa è rotto.
+Start from a public dataset for the first network. Generate your own only afterwards, once the
+pipeline works end to end — otherwise you are debugging training and data generation together and will
+not know which is broken.
 
-`ludus-tools` ospita il generatore di self-play; lo script di training sta in `training/` come progetto Python separato, con il suo `requirements.txt`. Non tentare di farli condividere il build.
+`ludus-tools` hosts the self-play generator; the training script lives in `training/` as a separate
+Python project with its own `requirements.txt`. Do not try to make them share a build.
 
 ---
 
-## 8. Strategia di test
+## 8. Testing strategy
 
-| Test | Cosa protegge | Dove |
+| Test | What it protects | Where |
 |---|---|---|
-| Suite perft | Move generation | `core`, veloce e lento (tag) |
-| **Invariante make/unmake** | Corruzione dello stato | `core`, property-based |
-| Zobrist incrementale == ricalcolato | Collisioni TT | `core`, property-based |
-| Casi speciali (§4.3) | Arrocco, ep, promozioni | `core`, unit |
-| SEE | Ordinamento e potatura | `search`, unit |
-| Matto in N | Sanità della ricerca | `search`, suite EPD |
-| Protocollo UCI | Compatibilità con le GUI | `uci`, golden I/O |
-| **Invariante accumulatore** | Correttezza NNUE | `nnue`, property-based |
-| Java vs PyTorch | Correttezza dell'export | `nnue`, dati fissi |
+| Perft suite | Move generation | `core`, fast and slow (tagged) |
+| **Make/unmake invariant** | State corruption | `core`, property-based |
+| Null move invariant | State corruption | `core`, property-based |
+| Incremental hash == recomputed | Table collisions | `core`, property-based |
+| Special cases (§4.3) | Castling, en passant, promotions | `core`, unit |
+| Magic tables vs ray walking | Silent attack-set corruption | `core`, unit |
+| SEE | Ordering and pruning | `core`, unit |
+| Colour symmetry | A sign or a table mirrored wrongly | `eval`, parameterised |
+| Mate distance scoring | An engine that shuffles in a won position | `search`, unit |
+| Board untouched after a search | State corruption across a whole game | `search`, unit |
+| Self-play, every move checked legal | M1's exit criterion, automated | `search`, unit and slow |
+| UCI protocol | GUI compatibility | `uci`, golden I/O |
+| SPRT and Elo statistics | A gate that would pass anything | `tools`, unit |
+| **Accumulator invariant** | NNUE correctness | `nnue`, property-based |
+| Java vs PyTorch | Export correctness | `nnue`, fixed data |
 
-### 8.2 L'invariante make/unmake
+Property tests use a seeded `java.util.Random` rather than a property-testing library: the generation
+needed here is a random legal game, which is ten lines, and a fixed seed makes any failure
+reproducible.
 
-Merita una menzione a parte perché è ciò che rende sicura la scelta di §3.3:
+### 8.2 The make/unmake invariant
 
-> Dopo `makeMove(m)` seguito da `unmakeMove(m)`, **ogni** campo di `Board` deve essere identico a prima: tutti i bitboard, lo zobrist, i diritti di arrocco, la casa ep, l'halfmove clock.
+It deserves a separate mention because it is what makes the choice in §3.3 safe:
 
-Property test su partite casuali. Un `unmakeMove` che dimentica di ripristinare i diritti di arrocco produce bug che si manifestano venti nodi dopo, in un ramo diverso, come una mossa illegale inspiegabile. Questo test lo becca al primo nodo.
+> After `makeMove(m)` followed by `unmakeMove(m)`, **every** field of `Board` must be identical to
+> before: all bitboards, the hash, castling rights, the en passant square, the halfmove clock.
+
+A property test over random games. An `unmakeMove` that forgets to restore castling rights produces
+bugs that surface twenty nodes later, in a different subtree, as an inexplicable illegal move. This
+test catches it at the node where it happens.
 
 ### 8.3 CI
 
-GitHub Actions, tre workflow:
+Two workflows exist today:
 
-- **PR**: build, test veloci, perft fino a d4 su tutta la suite. Deve stare sotto i due minuti.
-- **Nightly**: perft profondo (initial d6, Kiwipete d5), benchmark JMH con confronto sul commit precedente.
-- **Release**: fat jar + script di lancio, pubblicati come GitHub Release così chiunque può farlo giocare.
+- **CI**: build and the fast test suite on every push and pull request, plus a nightly job for the
+  deep perft run. The gating job stays well under two minutes.
+- **Status page**: rebuilds, recomputes the perft suite, regenerates the status page and the profile
+  cards, and deploys to GitHub Pages. On every push to main and nightly.
 
-Il badge verde sul README fa una differenza sproporzionata rispetto al costo di metterlo.
+A **release** workflow — shaded jar and launch scripts published as a GitHub Release so anyone can
+play it — is still planned.
+
+The green badge on the README makes a difference out of all proportion to the cost of adding it.
 
 ---
 
-## 9. Milestone
+## 9. Milestones
 
-Ognuna ha un criterio di uscita verificabile, non "quando mi sembra pronto".
+Each has a verifiable exit criterion, not "when it feels ready".
 
-| # | Contenuto | Fatto quando |
+| # | Content | Done when |
 |---|---|---|
-| **M0** ✅ | Board, bitboard, magic, movegen pseudo-legale, FEN, perft | **Tutta la suite perft passa.** Nient'altro conta finché questo non è vero |
-| **M1** ✅ | Negamax, HCE minima, UCI, iterative deepening, time management, ordinamento catture | Gioca una partita legale intera contro una GUI senza mai proporre una mossa illegale |
-| **M2** ✅ | Quiescence, TT, killer e history, SEE | Batte M1 con SPRT. Questo è il **baseline Elo** |
-| **M3** ✅ | PVS, null move, LMR | Perft ancora corretto (fondamentale) e SPRT positivo su ogni patch |
-| **M4** | Inferenza NNUE, prima rete allenata | Invariante accumulatore verde, Java≈PyTorch, **SPRT vs M3 positivo** |
-| **M5** | Vector API, tuning, `halfKP` | nps migliorato a parità di Elo, poi Elo migliorato |
-| **M6** ✅ | Pagina di stato su GitHub Pages + card SVG nel profilo | La pagina si aggiorna da sola a ogni push e nightly, senza intervento manuale |
+| **M0** ✅ | Board, bitboards, magics, pseudo-legal movegen, FEN, perft | **The full perft suite passes.** Nothing else counts until it does |
+| **M1** ✅ | Negamax, minimal HCE, UCI, iterative deepening, time management, capture ordering | Plays a complete legal game against a GUI without ever proposing an illegal move |
+| **M2** ✅ | Quiescence, transposition table, killers and history, SEE | Beats M1 by SPRT. This is the **Elo baseline** |
+| **M3** ✅ | PVS, null move, LMR | Perft still correct, and every patch SPRT-positive on its own |
+| **M4** | NNUE inference, first trained network | Accumulator invariant green, Java ≈ PyTorch, **SPRT-positive against M3** |
+| **M5** | Vector API, tuning, `halfKP`, direct legal movegen | Higher nps at equal Elo, then higher Elo |
+| **M6** ✅ | Status page on GitHub Pages and an SVG card for the profile | The page updates itself on every push and nightly, with no manual step |
 
-**M0 e M1 sono un weekend a testa.** M2 è dove il motore inizia a essere forte. M4 è il momento in cui hai il numero da mettere nel README, e da lì M5 può durare quanto ti diverte.
+**M0 and M1 are a weekend each.** M2 is where the engine starts being strong. M4 is where the number
+for the README arrives, and from there M5 can run as long as it stays fun.
 
-**M0 è chiuso.** Tutti i 32 casi della suite perft passano, i due invarianti della board (make/unmake reversibile, zobrist incrementale contro ricalcolato) sono verdi su partite casuali con seed fisso, e le tabelle magic sono validate contro il ray walking. 60 test in 3 secondi per il gate veloce, 32 casi perft profondi in 14 secondi per il nightly.
+**M0 is closed.** All 32 perft cases pass, both board invariants (make/unmake reversible, incremental
+hash against recomputed) are green over seeded random games, and the magic tables are validated
+against ray walking. 60 tests in 3 seconds for the fast gate, 32 deep perft cases in 14 seconds
+nightly.
 
-**M1 è chiuso.** Il motore parla UCI, viene lanciato come un jar singolo da una GUI, e gioca partite legali. 95 test verdi.
+**M1 is closed.** The engine speaks UCI, launches as a single jar from a GUI, and plays legal games.
+95 tests green.
 
-Due cose sono migrate da M2 a M1, e vale la pena dire perché. **L'iterative deepening** perché il time management dell'UCI lo richiede: senza, non c'è modo di rispettare `go wtime` — ti fermi a profondità fissa e sfori il tempo o lo butti. E **l'ordinamento delle catture**, perché alpha-beta senza ordinamento pota così poco che confrontare M2 contro un M1 non ordinato misurerebbe l'ordinamento invece di tutto il resto.
+Two things migrated from M2 into M1, and the reason is worth stating. **Iterative deepening**, because
+UCI time management requires it: without it there is no way to honour `go wtime` — you stop at a fixed
+depth and either overrun the clock or waste it. And **capture ordering**, because alpha-beta without
+ordering prunes so little that comparing M2 against an unordered M1 would measure the ordering instead
+of everything else.
 
-**La quiescence invece è rimasta fuori, deliberatamente**, e non è pigrizia: il criterio di uscita di M2 è battere M1 con SPRT, e quel numero è una misura vera solo se M1 esiste prima senza. Il costo è visibile a occhio nudo nell'output UCI — il punteggio oscilla di circa ±100 centipawn tra profondità pari e dispari, perché a profondità dispari l'ultima cattura la fa il motore e a profondità pari l'avversario. È l'*horizon effect* in forma pura, ed è la prima cosa che M2 sistema.
+**Quiescence stayed out deliberately**, and not out of laziness: M2's exit criterion is beating M1 by
+SPRT, and that number is only a real measurement if M1 exists without it first. The cost was visible
+by eye in the UCI output — the score swung roughly ±100 centipawns between odd and even depths,
+because at odd depths the engine gets the last capture and at even depths its opponent does. The
+horizon effect in pure form, and the first thing M2 fixed.
 
-La cosa importante di questa scaletta: **M1 è già un repo pubblicabile**. Un motore che gioca partite legali con UCI e CI verde è un progetto finito, non un cantiere. Tutto il resto è miglioramento incrementale su una base che si difende da sola. È l'assicurazione contro il repo abbandonato a metà.
+The important property of this schedule: **M1 is already a publishable repository**. An engine that
+plays legal games over UCI with a green CI badge is a finished project, not a building site.
+Everything after it is incremental improvement on a base that stands on its own. That is the insurance
+against the half-abandoned repository.
 
-**M2 è chiuso, ed è il primo milestone con un numero vero.**
+**M2 is closed, and it is the first milestone with a real number.**
 
 | | |
 |---|---|
-| Risultato | **186 vittorie, 12 patte, 2 sconfitte** su 200 partite — 96,0% |
-| Elo | **+552 ± 106** contro M1 |
-| SPRT | bound superato alla **partita 11** (11-0-0), LLR finale +55,7 su bound ±2,94 |
-| Condizioni | 100 aperture giocate a colori invertiti, 100 ms per mossa, hash 64 MB |
-| Mosse illegali | **zero** |
+| Result | **186 wins, 12 draws, 2 losses** over 200 games — 96.0% |
+| Elo | **+552 ± 106** against M1 |
+| SPRT | bound crossed at **game 11** (11-0-0), final LLR +55.7 against bounds of ±2.94 |
+| Conditions | 100 openings played with colours swapped, 100 ms per move, 64 MB hash |
+| Illegal moves | **zero** |
 
-L'intervallo è largo perché a punteggi estremi l'Elo è intrinsecamente imprecisa: a 96% ogni singola partita in più sposta poco la stima. Il numero da leggere non è "552" ma "il limite inferiore dell'intervallo è +446", che è comunque enorme.
+The interval is wide because Elo is inherently imprecise at extreme scores: at 96% each additional
+game barely moves the estimate. The number to read is not "552" but "the lower bound is +446", which
+is enormous anyway.
 
-Cosa lo ha prodotto, in ordine di peso plausibile: la **quiescence** (la maggior parte), poi la **transposition table** — che oltre a evitare di ricercare trasposizioni fornisce la mossa migliore dell'iterazione precedente, cioè il miglior suggerimento di ordinamento esistente — poi **killer, history e SEE** sull'ordinamento. Non ho separato i contributi con SPRT individuali: sarebbe stato l'approccio corretto e non l'ho fatto, quindi la ripartizione sopra è un'ipotesi ragionata, non una misura. Da M3 in poi la regola "una patch per volta con il suo SPRT" va applicata davvero, ed è lì che serve.
+What produced it, in plausible order of weight: **quiescence** (most of it), then the **transposition
+table** — which besides avoiding re-searched transpositions supplies the previous iteration's best
+move, the most valuable ordering hint available — then **killers, history and SEE** on the ordering. I
+did not separate the contributions with individual SPRTs. That would have been the correct approach
+and I did not do it, so the breakdown above is reasoned guesswork rather than a measurement. From M3
+onwards the rule "one patch at a time with its own SPRT" gets applied for real, and §9.0 is what
+happened when it was.
 
-L'effetto della quiescence si vede anche senza match, nell'output UCI sulla stessa posizione:
+The effect of quiescence is visible without a match at all, in the UCI output on one position:
 
 ```
 M1:  depth 1  cp  25    depth 2  cp -140    depth 3  cp  50
 M2:  depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
 ```
 
-Oscillazioni da ±165 centipawn a ±30. È esattamente l'*horizon effect* che §5.2 prevedeva, misurato prima e dopo.
+Swings of ±165 centipawns became ±30. Exactly the horizon effect §5.2 predicted, measured before and
+after.
 
-**Cosa è slittato a M3:** null move pruning, late move reductions, futility pruning. La tabella diceva "potature" in M2; ci sono la potatura SEE in quiescence e i tagli dell'ordinamento, ma le tre potature vere no. Ognuna può nascondere un bug che perde partite solo in posizioni rare — lo zugzwang per il null move — e vanno introdotte una per volta con il proprio SPRT. Ammucchiarle qui avrebbe reso impossibile attribuire un'eventuale regressione.
+### 9.0 M3 — where "one patch at a time" paid for itself
 
-### 9.0 M3 — dove la disciplina "una patch per volta" si è ripagata
+M3 is the first milestone where every patch got its own SPRT against the previous version. At the end
+of M2 I had written that the breakdown of contributions was "reasoned guesswork rather than a
+measurement", and that from here the rule had to be applied for real. The first experiment explained
+why.
 
-M3 è il primo milestone in cui ogni patch ha il proprio SPRT contro la versione precedente. Alla fine di M2 avevo scritto che la ripartizione dei contributi era "un'ipotesi ragionata, non una misura", e che da qui in poi la regola andava applicata davvero. Il primo esperimento ha spiegato perché.
+#### Patch 1 — null move pruning: **−16 ± 36 Elo, rejected**
 
-#### Patch 1 — null move pruning: **−16 ± 36 Elo, respinta**
+300 games, 120-46-134, LLR −0.62. Inconclusive and trending negative.
 
-300 partite, 120-46-134, LLR −0,62. Inconcludente e in tendenza negativa.
+The number is not the finding, though. The patch was **provably inert**, and the reason is instructive.
 
-Il numero però non è la scoperta. La patch era **provabilmente inerte**, e il motivo è istruttivo.
+Its guard was `isPv = beta - alpha > 1`, meaning *do not attempt a null move at a full-window node* —
+correct in principle: speculation belongs where being wrong costs a re-search rather than corrupting
+the score the engine acts on.
 
-La guardia era `isPv = beta - alpha > 1`, cioè *non fare null move sui nodi a finestra piena* — corretta in linea di principio: la speculazione va confinata dove sbagliare costa una ri-ricerca invece di corrompere il punteggio su cui il motore agisce.
+But in M2's code **there was not a single null-window search anywhere**. Every child was called with
+`(-beta, -alpha)` inherited from its parent, and the only narrow-window call in the whole file was the
+null move probe itself, which recurses with `allowNull=false`. So the condition was true at every node
+and the block never ran. The −16 is noise plus the cost of evaluating the guards.
 
-Ma nel codice di M2 **non esisteva una sola ricerca a finestra nulla**. Ogni figlio veniva chiamato con `(-beta, -alpha)` ereditata dal padre, e l'unica chiamata a finestra stretta in tutto il file era la sonda del null move stessa — che ricorre con `allowNull=false`. Quindi la condizione era vera a ogni nodo e il blocco non si eseguiva mai. Il −16 è rumore più il costo di valutare le guardie.
+**Without a per-patch SPRT I would have shipped a feature that does nothing**, and listed it in the
+README. It is exactly the failure the gate exists to catch, and it happened on the first attempt.
 
-**Senza SPRT per patch avrei spedito una funzionalità che non fa niente**, e l'avrei elencata nel README. È esattamente il fallimento che il gate esiste per intercettare, ed è capitato al primo tentativo.
+#### Patch 2 — PVS: **+119 ± 43 Elo, accepted**
 
-#### Patch 2 — PVS: **+119 ± 43 Elo, accettata**
+242 games, 143-36-63, 66.5%, LLR +2.97, bound crossed.
 
-242 partite, 143-36-63, 66,5%, LLR +2,97, bound superato.
+Principal variation search gives every move after the first a one-point scout window — "does this beat
+alpha, yes or no?" — and searches properly only the ones that answer yes. It is worth having on its
+own, but above all it **creates the null-window nodes that did not exist before**, so patch 1's null
+move fires for the first time.
 
-La *principal variation search* dà a ogni mossa dopo la prima una sonda a finestra di un punto — "batte alpha, sì o no?" — e cerca sul serio solo quelle che rispondono sì. Vale da sola, ma soprattutto **crea i nodi a finestra nulla che prima non esistevano**, quindi il null move della patch 1 si attiva per la prima volta.
+Honesty about attribution: this number **does not separate PVS from null move**, and cannot, because
+one is inert without the other. That is not sloppiness in the experiment — it is a property of the
+code, and a measured one: patch 1 alone was worth nothing, and that is the proof. The two are a single
+change, "make reduced-window searching work", and were measured as such.
 
-Onestà sull'attribuzione: questo numero **non separa PVS dal null move**, e non può, perché uno è inerte senza l'altro. Non è pigrizia nel disegno dell'esperimento — è una proprietà del codice, misurata: la patch 1 da sola vale zero, e questa è la prova. Le due cose sono una modifica sola, "far funzionare la ricerca a finestra ridotta", e come tale è stata misurata.
+Independent confirmation, same position at depth 4: **3641 nodes against 2952**, down 19% at equal
+depth.
 
-Conferma indipendente, dalla stessa posizione a profondità 4: **3641 nodi contro 2952**, −19% a parità di profondità.
+#### Patch 3 — late move reductions: **+58.7 ± 27 Elo, accepted**
 
-#### Patch 3 — late move reductions: **+58,7 ± 27 Elo, accettata**
+544 games, 272-91-181, 58.4%, LLR +2.97, bound crossed.
 
-544 partite, 272-91-181, 58,4%, LLR +2,97, bound superato.
+If the ordering is any good, a quiet move sitting eighth in the list is not the best move, and
+searching it to full depth is work spent confirming something already likely. Search it shallower; if
+the shallow search is wrong and the move beats alpha anyway, the mistake is caught and paid for
+immediately with a re-search.
 
-Se l'ordinamento vale qualcosa, una mossa tranquilla che sta ottava in lista non è la mossa migliore, e cercarla a profondità piena è lavoro speso per confermare qualcosa di già probabile. Si cerca più corta; se la ricerca corta sbaglia e la mossa batte comunque alpha, l'errore viene intercettato e pagato subito con una ri-ricerca.
+Exempt: captures, promotions, checks given or received, and the first few moves in the list. Those are
+the cases where a missed line means material or the game, not an imprecision.
 
-Esenti: catture, promozioni, scacchi dati o subiti, e le prime mosse della lista. Sono i casi in cui una linea persa è materiale o partita persa, non un'imprecisione.
+**A methodological note.** The first match ended at 300 games with **+56.1 ± 35, LLR +1.68** —
+inconclusive, book exhausted. The 95% interval was already entirely above zero, and calling it good
+there would have been easy. But the declared rule is that the SPRT decides, not the eye, so I extended
+the book and replayed: 544 games, bound crossed, **+58.7**. The point estimate barely moved — the
+larger sample did not "find" a result, it reached the standard of proof set before any numbers were
+seen.
 
-**Una nota metodologica.** Il primo match si è chiuso a 300 partite con **+56,1 ± 35, LLR +1,68** — inconcludente, book esaurito. L'intervallo al 95% era già interamente sopra lo zero, e sarebbe stato comodo chiamarla buona. Ma la regola dichiarata è che decide l'SPRT, non l'occhio, quindi ho esteso il book e rigiocato: 544 partite, bound superato, **+58,7**. Il punto stimato è praticamente lo stesso — il campione più grande non ha "trovato" un risultato, ha solo raggiunto la soglia di prova che avevo fissato prima di guardare i numeri.
+#### Milestone result
 
-#### Limite noto del match runner
+**M3 against M2: +181.7 ± 39.5 Elo**, 195-54-51 over 300 games, 74.0%, bound crossed at game 85.
 
-Un esito inconcludente costa **rigiocare tutto da capo**: il runner non sa riprendere né estendere un match esistente. Con partite da minuti è uno spreco reale, ed è la prima cosa da sistemare quando M4 inizierà a produrre patch da pochi Elo, dove gli inconcludenti saranno la norma e non l'eccezione.
+A useful consistency check: the two accepted patches measured in a chain gave +119 and +58.7, summing
+to +177.7. The direct measurement lands within four Elo of that. Chained comparisons are holding
+together.
 
-#### Cosa è rimasto fuori da M3, e perché
+#### A known limitation of the match runner
 
-**Futility pruning** e **movegen legale diretta** non sono entrati. Non per mancanza di tempo travestita da scelta: la movegen legale diretta è una riscrittura ad alto rischio del pezzo più delicato del motore, il cui guadagno è in nodi al secondo e non in Elo, e arriva più sensatamente accanto al lavoro sulla Vector API di M5, dove la performance è il tema. La futility è la candidata naturale per la prossima patch singola.
+An inconclusive result costs **replaying everything from scratch**: the runner cannot resume or extend
+an existing match. With games measured in minutes that is real waste, and it is the first thing to fix
+when M4 starts producing patches worth a few Elo, where inconclusive results will be the norm rather
+than the exception.
 
-### 9.1 M6 — la pagina di stato
+#### What stayed out of M3, and why
 
-Ultimo step, e per struttura: raccoglie i numeri che i milestone precedenti producono, quindi prima devono esistere.
+**Futility pruning** and **direct legal move generation** did not land. Not out of time pressure
+dressed up as a decision: direct legal generation is a high-risk rewrite of the most delicate code in
+the engine, whose payoff is nodes per second rather than Elo, and it belongs beside the Vector API
+work in M5 where performance is the theme. Futility is the natural candidate for the next single
+patch.
 
-L'idea è una pagina che si legge da sola per capire come sta andando il motore — Elo per milestone, nps, esito della suite perft, storico delle patch e degli SPRT — generata dai workflow e aggiornata senza intervento manuale.
+### 9.1 M6 — the status page
 
-**Il vincolo che ne determina la forma:** i README di GitHub **sanificano l'HTML**. Niente `<iframe>`, niente `<script>`, niente CSS. Quindi "attaccare una pagina HTML al profilo" non è letteralmente possibile, e il modo che funziona è a due pezzi:
+Last by design: it collects the numbers the earlier milestones produce, so those have to exist first.
 
-1. **La pagina piena su GitHub Pages**, servita dal repo `ludus`. Qui l'HTML è libero: grafici dell'Elo nel tempo, tabelle perft, cronologia degli SPRT.
-2. **Una card SVG nel profilo**, generata dallo stesso workflow e committata su `LorenzoVicino/LorenzoVicino`, con un link alla pagina. L'SVG passa la sanificazione perché è un'immagine — è esattamente il meccanismo che il profilo già usa per `languages-light.svg`.
+The idea is a page that explains on its own how the engine is doing — Elo per milestone, nps, the
+perft verdict, the history of patches and their SPRTs — generated by the workflows and updated with no
+manual step.
 
-Sul tema: scacchiera. La griglia 8×8 è già un sistema di layout, i colori delle case danno la palette, e la notazione algebrica dà le etichette degli assi — quindi il tema non è decorazione applicata sopra, è la struttura stessa dei dati.
+**The constraint that determines its shape:** GitHub READMEs **sanitise HTML**. No `<iframe>`, no
+`<script>`, no CSS. So "attaching an HTML page to the profile" is not literally possible, and what
+works comes in two pieces:
 
-Un'accortezza che vale la pena fissare adesso: la card SVG va generata in **due varianti**, chiara e scura, e referenziata nel README con `<picture>` e `prefers-color-scheme`. Il profilo lo fa già per le lingue; una card che si legge solo in tema chiaro è mezza rotta.
+1. **The full page on GitHub Pages**, served from the `ludus` repository. Here HTML is unrestricted.
+2. **An SVG card for the profile**, generated by the same workflow and linked to the page. SVG passes
+   sanitisation because it is an image — the same mechanism the profile already uses for its language
+   chart.
+
+On the theme: the board. The 8×8 grid is already a layout system and the square colours give the
+palette, so the theme is not decoration applied on top — it is the structure of the data. Three things
+on the page come from the subject rather than being ornament: the Elo result drawn as the evaluation
+bar an analysis board shows, the milestones as a numbered ladder because they genuinely are a sequence,
+and each perft position drawn as a real board from its own FEN — the position the numbers beside it
+were counted from.
+
+One precaution worth fixing now: the card is generated in **two variants**, light and dark, referenced
+with `<picture>` and `prefers-color-scheme`. A card that only reads on a white background is half
+broken.
+
+**A note on what the generator refuses to do.** If a recomputed perft count disagrees with the
+published one, it fails instead of publishing. A page that said "verified" when it was not would be
+worse than no page.
 
 ---
 
-## 10. Rischi
+## 10. Risks
 
-| Rischio | Mitigazione |
+| Risk | Mitigation |
 |---|---|
-| Bug silenziosi nella movegen | Perft prima di tutto, sempre. Non scrivere ricerca su una movegen non validata |
-| Il tempo 2 della movegen rompe la correttezza | Il tempo 1 resta nel repo come oracolo, dietro un flag |
-| Perdersi nel tuning di HCE | Timebox esplicito. HCE è materiale di scarto (§6.1) |
-| Dati di training scadenti | Prima rete da dataset pubblico, self-play solo dopo |
-| Pause GC nella ricerca | Disciplina zero-alloc, verificata con JFR (§3.3) |
-| L'Atto II slitta indefinitamente | M1 è già spedibile. Il repo non muore comunque |
-| Elo che non sale e non si sa perché | nps e Elo misurati separatamente (§1.3), una patch per volta |
+| Silent move generation bugs | Perft first, always. Never write search on unvalidated movegen |
+| Direct legal movegen breaks correctness | Stage one stays in the repository as the oracle |
+| Losing weeks tuning HCE | An explicit timebox. HCE is scrap material (§6.1) |
+| Poor training data | First network from a public dataset, self-play only afterwards |
+| GC pauses in the search | Zero-allocation discipline, verified with JFR (§3.3) |
+| Act II slipping indefinitely | M1 is already shippable. The repository does not die either way |
+| Elo not rising and nobody knowing why | nps and Elo measured separately (§1.3), one patch at a time |
 
 ---
 
-## 11. Cosa raccontare nel README
+## 11. What to say in the README
 
-Il codice non parla da solo. Le tre cose che rendono questo progetto interessante da leggere, e su cui vale la pena scrivere davvero:
+Code does not speak for itself. The three things that make this project interesting to read about, and
+worth writing properly:
 
-1. **Il numero.** "La NNUE ha aggiunto N Elo, misurati con SPRT su M partite, ecco la configurazione del match." Con il grafico. È la cosa più rara in un portfolio di machine learning.
-2. **Java come vincolo interessante.** Zero-allocazione in un ciclo caldo, layout della TT ad array paralleli, assenza di `PEXT`, Vector API, verifica dell'inlining. Nessuno scrive di questo: tutti i motori seri sono in C++ o Rust. È contenuto originale, non un riassunto di CPW.
-3. **Il seam.** Perché il confine della valutazione sta esattamente dove sta, e cosa sarebbe costato metterlo altrove. Questa è la parte di design che un lettore competente riconosce, e vale più di dieci pattern elencati.
+1. **The number.** "The NNUE added N Elo, measured by SPRT over M games, here is the match
+   configuration." With the chart. It is the rarest thing in a machine learning portfolio.
+2. **Java as an interesting constraint.** Zero allocation in a hot loop, the parallel-array table
+   layout, the absence of `PEXT`, the Vector API, verifying inlining. Nobody writes about this: every
+   serious engine is in C++ or Rust. Original content, not a summary of the wiki.
+3. **The seam.** Why the evaluation boundary sits exactly where it does, and what putting it elsewhere
+   would have cost. This is the design work a competent reader recognises, and it is worth more than
+   ten patterns listed by name.
