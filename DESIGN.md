@@ -883,6 +883,49 @@ the engine, whose payoff is nodes per second rather than Elo, and it belongs bes
 work in M5 where performance is the theme. Futility is the natural candidate for the next single
 patch.
 
+### 9.05 M4 — three gates of four
+
+**M4 is not closed.** Its exit criterion has four parts, and the fourth fails.
+
+| Gate | Result |
+|---|---|
+| Accumulator invariant | ✅ held bit for bit over **73,862 positions** |
+| Java matches PyTorch | ✅ **worst gap 4 centipawns** across ten fixtures |
+| The seam holds | ✅ the network loads through a UCI option; `ludus-search` unchanged and unable to name it |
+| **SPRT against M3** | ❌ **−589 ± 147 Elo**, 4-5-191 over 200 games, H0 accepted after 12 |
+
+The network is worse than the evaluation it was meant to replace, by a lot. It does not become the
+default, because the rule was stated before the number was known.
+
+#### The distinction the agreement test buys
+
+Without it, a result like this leaves two possibilities: the network is weak, or the engine is
+running it wrongly. They call for completely different work, and guessing which one costs days.
+
+The engine reproduces PyTorch's own answer to within 4 centipawns on every fixture, and the
+incremental accumulator matches a full recomputation exactly. So the implementation is faithful, and
+**the network itself is the problem**. That is worth more than the Elo figure.
+
+#### Why it is weak, in numbers
+
+- **252,000 training positions.** Networks that work use tens of millions. This is two orders of
+  magnitude short, and no amount of tuning closes that.
+- **A weak teacher.** The labels are depth-5 scores from an engine of maybe 2000 Elo. A student
+  cannot outrun its teacher by much, and this one had far too few lessons to get close.
+- **Undertrained.** Validation loss was still falling at the tenth epoch — training stopped because
+  the run was short, not because it had converged.
+
+None of that is a surprise, and it was said before the match was run rather than after.
+
+#### What would actually move it
+
+The generation pipeline produces about 30,000 positions a minute on one machine with eight threads.
+Twenty-five million is roughly fourteen hours — or an evening across two machines, which is precisely
+what the queue was built for. A deeper search for the labels costs proportionally more but teaches
+better. After that: a learning-rate schedule, more epochs, and `halfKP` features.
+
+The infrastructure to do all of it is built and verified. What is missing is time, not code.
+
 ### 9.1 M6 — the status page
 
 Last by design: it collects the numbers the earlier milestones produce, so those have to exist first.

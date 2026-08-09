@@ -57,15 +57,26 @@ public final class GamePlayer implements AutoCloseable {
 
     public GamePlayer(List<String> commandA, List<String> commandB, long moveTimeMillis,
                       int maxPlies, Duration replyTimeout) throws IOException {
+        this(commandA, commandB, Map.of(), Map.of(), moveTimeMillis, maxPlies, replyTimeout);
+    }
+
+    /**
+     * @param optionsA UCI options to set on the candidate before any game, and {@code optionsB} on
+     *                 the baseline. This is how one build plays another with a different evaluation
+     *                 loaded, without needing two different jars
+     */
+    public GamePlayer(List<String> commandA, List<String> commandB,
+                      Map<String, String> optionsA, Map<String, String> optionsB,
+                      long moveTimeMillis, int maxPlies, Duration replyTimeout) throws IOException {
         this.moveTimeMillis = moveTimeMillis;
         this.maxPlies = maxPlies;
         this.replyTimeout = replyTimeout;
 
         UciClient a = null;
         try {
-            a = start("A", commandA);
+            a = start("A", commandA, optionsA);
             this.engineA = a;
-            this.engineB = start("B", commandB);
+            this.engineB = start("B", commandB, optionsB);
         } catch (IOException | RuntimeException e) {
             if (a != null) {
                 a.close();
@@ -74,9 +85,13 @@ public final class GamePlayer implements AutoCloseable {
         }
     }
 
-    private UciClient start(String label, List<String> command) throws IOException {
+    private UciClient start(String label, List<String> command, Map<String, String> options)
+            throws IOException {
         UciClient client = new UciClient(label, command);
         client.handshake(replyTimeout);
+        options.forEach(client::setOption);
+        // After the options, so a slow one — loading a network off disk — is waited for rather than
+        // raced against the first search.
         client.awaitReady(replyTimeout);
         return client;
     }

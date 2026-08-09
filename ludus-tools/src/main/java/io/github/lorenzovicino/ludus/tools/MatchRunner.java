@@ -3,6 +3,7 @@ package io.github.lorenzovicino.ludus.tools;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
@@ -35,20 +36,28 @@ public final class MatchRunner {
 
     private final List<String> commandA;
     private final List<String> commandB;
+    private final Map<String, String> optionsA;
+    private final Map<String, String> optionsB;
     private final List<String> openings;
     private final Config config;
-    private final Sprt sprt;
 
     private final MatchTally tally;
     private final AtomicBoolean stop = new AtomicBoolean();
 
     public MatchRunner(List<String> commandA, List<String> commandB, List<String> openings,
                        Config config, Sprt sprt) {
+        this(commandA, commandB, Map.of(), Map.of(), openings, config, sprt);
+    }
+
+    public MatchRunner(List<String> commandA, List<String> commandB,
+                       Map<String, String> optionsA, Map<String, String> optionsB,
+                       List<String> openings, Config config, Sprt sprt) {
         this.commandA = commandA;
         this.commandB = commandB;
+        this.optionsA = optionsA;
+        this.optionsB = optionsB;
         this.openings = openings;
         this.config = config;
-        this.sprt = sprt;
         this.tally = new MatchTally(sprt, config.stopOnVerdict(), stop);
     }
 
@@ -81,8 +90,8 @@ public final class MatchRunner {
     private void workLoop(Queue<String> pending) {
         // Each worker owns its own pair of processes: engines are stateful and single-threaded, and
         // sharing one across concurrent games would interleave two searches in one engine.
-        try (GamePlayer player = new GamePlayer(commandA, commandB, config.moveTimeMillis(),
-                config.maxPlies(), config.replyTimeout())) {
+        try (GamePlayer player = new GamePlayer(commandA, commandB, optionsA, optionsB,
+                config.moveTimeMillis(), config.maxPlies(), config.replyTimeout())) {
 
             String opening;
             while (!stop.get() && (opening = pending.poll()) != null) {

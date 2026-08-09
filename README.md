@@ -25,6 +25,16 @@ because it was inert: its guard correctly refused to fire on wide search windows
 no narrow ones until principal variation search created them. Shipped without measurement, it would
 have been a feature that did nothing. The full account is in [`DESIGN.md`](DESIGN.md) §9.0.
 
+**Act II is built but not yet good.** The network runs — the accumulator matches a full
+recomputation bit for bit over 73,862 positions, and the engine reproduces PyTorch's own answer to
+within 4 centipawns — but the first trained network lost its match against the hand-crafted
+evaluation by **−589 ± 147 Elo**, so it is not the default. It was trained on 252,000 positions;
+networks that work use tens of millions.
+
+That distinction is the whole reason the agreement test exists: it separates "the network is weak"
+from "the engine runs it wrongly", and those need completely different work.
+[`DESIGN.md`](DESIGN.md) §9.05 has the full account.
+
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
 ## Architecture
@@ -210,7 +220,7 @@ than a handicap. Some of what the constraint forces:
 | **M1** ✅ | Search, evaluation, UCI | Plays a complete legal game against a GUI |
 | **M2** ✅ | Quiescence, transposition table, killers, history, SEE | Beats M1 by SPRT — the Elo baseline |
 | **M3** ✅ | Principal variation search, null move, late move reductions | Perft still correct, every patch SPRT-positive |
-| **M4** | NNUE inference, first trained network | Accumulator invariant green, SPRT-positive vs M3 |
+| **M4** ¾ | NNUE inference, first trained network | Accumulator invariant green, Java ≈ PyTorch, SPRT-positive vs M3 — three of four |
 | **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
 | **M6** ✅ | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
 

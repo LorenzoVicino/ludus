@@ -46,8 +46,11 @@ public final class NnueEvaluator implements Evaluator {
             output += layerTwo[i] * network.outputWeights[i];
         }
 
-        // Back out of the fixed-point units the layers accumulate in, and into centipawns.
-        return output * NnueNetwork.SCALE / (NnueNetwork.QA * NnueNetwork.QB);
+        // Back out of the fixed-point units the layers accumulate in, and into centipawns. In long,
+        // because the product of a wide activation scale and 400 leaves an int with no headroom.
+        long scaled = (long) output * NnueNetwork.SCALE;
+        long divisor = (long) network.qa() * network.qb();
+        return (int) Math.floorDiv(scaled + divisor / 2, divisor);
     }
 
     /**
@@ -55,24 +58,40 @@ public final class NnueEvaluator implements Evaluator {
      * keeps the products in the layers below inside the range their integer types can hold.
      */
     private void clip(short[] source, int offset) {
+        int ceiling = network.qa();
         for (int i = 0; i < NnueNetwork.HIDDEN; i++) {
             int value = source[i];
-            activations[offset + i] = value < 0 ? 0 : Math.min(value, NnueNetwork.QA);
+            activations[offset + i] = value < 0 ? 0 : Math.min(value, ceiling);
         }
     }
 
-    private static void propagate(int[] input, int inputSize, byte[] weights, int[] biases,
-                                  int[] output) {
+    private void propagate(int[] input, int inputSize, byte[] weights, int[] biases, int[] output) {
         for (int neuron = 0; neuron < output.length; neuron++) {
             int sum = biases[neuron];
             int base = neuron * inputSize;
             for (int i = 0; i < inputSize; i++) {
                 sum += input[i] * weights[base + i];
             }
-            // Divide out the weight scale so the result is back in activation units, then clip.
-            int scaled = sum / NnueNetwork.QB;
-            output[neuron] = scaled < 0 ? 0 : Math.min(scaled, NnueNetwork.QA);
+            output[neuron] = clippedRelu(divideRounding(sum, network.qb()), network.qa());
         }
+    }
+
+    /**
+     * Divides back out of the weight scale, rounding to nearest rather than truncating.
+     *
+     * <p>Plain integer division looks harmless here and is not. It always truncates towards zero, so
+     * the error is <em>biased</em> rather than random, and it compounds: one unit lost on a first-layer
+     * activation re-enters the second layer multiplied by a weight of up to 127 across thirty-two
+     * neurons, which is tens of units out of an activation range of 127. Measured against the trained
+     * network it was worth up to 29 centipawns — found by the test that compares the two
+     * implementations, and invisible to every other test in the project.
+     */
+    private static int divideRounding(int value, int divisor) {
+        return Math.floorDiv(value + divisor / 2, divisor);
+    }
+
+    private static int clippedRelu(int value, int ceiling) {
+        return value < 0 ? 0 : Math.min(value, ceiling);
     }
 
     @Override

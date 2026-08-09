@@ -1,0 +1,10 @@
+# CPU wheels are enough: the network is small and the dataset streams from disk, so a GPU would
+# spend most of its time waiting. Install with
+#
+#   python -m venv .venv
+#   .venv/Scripts/pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cpu
+#
+# This is a separate project from the Maven build on purpose. Training lives on its ecosystem —
+# dataloaders, optimisers, tensorboard — and forcing the two to share a build would make both worse.
+torch>=2.6
+numpy

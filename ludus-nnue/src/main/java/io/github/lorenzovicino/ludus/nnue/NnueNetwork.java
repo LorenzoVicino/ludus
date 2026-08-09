@@ -59,15 +59,36 @@ public final class NnueNetwork {
     public static final int L1 = 32;
     public static final int L2 = 32;
 
-    /** Activation range: the clipped ReLU saturates here, and feature weights are scaled by it. */
-    public static final int QA = 127;
-    /** Scale for the dense layers, kept a power of two so the division is a shift. */
-    public static final int QB = 64;
     /** Turns the network's own units into centipawns. */
     public static final int SCALE = 400;
 
     private static final int MAGIC = 0x4C55_444E; // "LUDN"
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
+
+    /**
+     * The quantisation scales, read from the file rather than fixed here.
+     *
+     * <p>Version 1 hardcoded them, and it was wrong in a way that no error could report. A trained
+     * feature weight averaged 0.039; at a scale of 127 that is the integer <b>5</b>, and a first-layer
+     * weight of 0.037 at a scale of 64 is the integer <b>2</b>. The network shipped was a coarse
+     * caricature of the one that was trained — measured at up to 29 centipawns off, and found only
+     * because the two implementations are compared against each other.
+     *
+     * <p>Fixed constants make that a recurring hazard: every retraining shifts the weight
+     * distribution, and a scale chosen for last month's weights quietly mis-serves this month's. So
+     * the exporter measures the weights, picks the largest scales that saturate nothing, and writes
+     * them alongside. The engine reads what it is given.
+     */
+    private final int qa;
+    private final int qb;
+
+    public int qa() {
+        return qa;
+    }
+
+    public int qb() {
+        return qb;
+    }
 
     final short[] featureWeights;  // [INPUTS * HIDDEN], column-major by feature
     final short[] featureBiases;   // [HIDDEN]
@@ -78,8 +99,14 @@ public final class NnueNetwork {
     final byte[] outputWeights;    // [L2]
     final int outputBias;
 
-    NnueNetwork(short[] featureWeights, short[] featureBiases, byte[] l1Weights, int[] l1Biases,
+    NnueNetwork(int qa, int qb,
+                short[] featureWeights, short[] featureBiases, byte[] l1Weights, int[] l1Biases,
                 byte[] l2Weights, int[] l2Biases, byte[] outputWeights, int outputBias) {
+        if (qa <= 0 || qb <= 0) {
+            throw new IllegalArgumentException("Quantisation scales must be positive: " + qa + ", " + qb);
+        }
+        this.qa = qa;
+        this.qb = qb;
         this.featureWeights = featureWeights;
         this.featureBiases = featureBiases;
         this.l1Weights = l1Weights;
@@ -125,6 +152,8 @@ public final class NnueNetwork {
         expect(in.readInt(), HIDDEN, "hidden size");
         expect(in.readInt(), L1, "first layer size");
         expect(in.readInt(), L2, "second layer size");
+        int qa = in.readInt();
+        int qb = in.readInt();
 
         short[] featureWeights = readShorts(in, INPUTS * HIDDEN);
         short[] featureBiases = readShorts(in, HIDDEN);
@@ -135,7 +164,7 @@ public final class NnueNetwork {
         byte[] outputWeights = readBytes(in, L2);
         int outputBias = in.readInt();
 
-        return new NnueNetwork(featureWeights, featureBiases, l1Weights, l1Biases,
+        return new NnueNetwork(qa, qb, featureWeights, featureBiases, l1Weights, l1Biases,
                 l2Weights, l2Biases, outputWeights, outputBias);
     }
 
@@ -147,6 +176,8 @@ public final class NnueNetwork {
         out.writeInt(HIDDEN);
         out.writeInt(L1);
         out.writeInt(L2);
+        out.writeInt(qa);
+        out.writeInt(qb);
 
         for (short value : featureWeights) {
             out.writeShort(value);
@@ -194,7 +225,7 @@ public final class NnueNetwork {
         int[] l2Biases = randomInts(random, L2);
         byte[] outputWeights = randomBytes(random, L2);
 
-        return new NnueNetwork(featureWeights, featureBiases, l1Weights, l1Biases,
+        return new NnueNetwork(1024, 256, featureWeights, featureBiases, l1Weights, l1Biases,
                 l2Weights, l2Biases, outputWeights, random.nextInt(2001) - 1000);
     }
 

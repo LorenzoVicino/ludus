@@ -7,7 +7,9 @@ import io.github.lorenzovicino.ludus.tools.selfplay.GeneratorMain;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Entry point for the match runner, in three modes.
@@ -107,11 +109,15 @@ public final class MatchMain {
         long seed = 20260808L;
         boolean stopOnVerdict = true;
         int openingPlies = 8;
+        Map<String, String> optionsA = new LinkedHashMap<>();
+        Map<String, String> optionsB = new LinkedHashMap<>();
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--engine-a" -> engineA = require(args, ++i, "--engine-a");
                 case "--engine-b" -> engineB = require(args, ++i, "--engine-b");
+                case "--option-a" -> addOption(optionsA, require(args, ++i, "--option-a"));
+                case "--option-b" -> addOption(optionsB, require(args, ++i, "--option-b"));
                 case "--book" -> book = Path.of(require(args, ++i, "--book"));
                 case "--pairs" -> pairs = Integer.parseInt(require(args, ++i, "--pairs"));
                 case "--movetime" -> moveTime = Long.parseLong(require(args, ++i, "--movetime"));
@@ -148,8 +154,15 @@ public final class MatchMain {
         System.out.printf("SPRT H0 %.1f vs H1 %.1f Elo, alpha %.2f beta %.2f%n%n",
                 elo0, elo1, alpha, beta);
 
+        if (!optionsA.isEmpty()) {
+            System.out.println("A options: " + optionsA);
+        }
+        if (!optionsB.isEmpty()) {
+            System.out.println("B options: " + optionsB);
+        }
+
         MatchRunner runner = new MatchRunner(
-                split(engineA), split(engineB), openings, config, sprt);
+                split(engineA), split(engineB), optionsA, optionsB, openings, config, sprt);
         MatchResult result = runner.run();
 
         EloEstimate estimate = EloEstimate.of(result.wins(), result.draws(), result.losses());
@@ -187,6 +200,18 @@ public final class MatchMain {
         return Arrays.asList(command.trim().split("\\s+"));
     }
 
+    /**
+     * Parses {@code Name=value}, which is how one build is made to play another with a different
+     * evaluation loaded rather than needing two jars that differ only in a setting.
+     */
+    private static void addOption(Map<String, String> options, String assignment) {
+        int equals = assignment.indexOf('=');
+        if (equals <= 0) {
+            throw new IllegalArgumentException("Options look like Name=value, got " + assignment);
+        }
+        options.put(assignment.substring(0, equals).trim(), assignment.substring(equals + 1).trim());
+    }
+
     private static String require(String[] args, int index, String option) {
         if (index >= args.length) {
             throw new IllegalArgumentException(option + " needs a value");
@@ -208,6 +233,8 @@ public final class MatchMain {
                 LOCAL
                   --engine-a CMD     command that launches the candidate
                   --engine-b CMD     command that launches the baseline
+                  --option-a N=V     UCI option for the candidate, repeatable
+                  --option-b N=V     UCI option for the baseline, repeatable
                   --book PATH        EPD or FEN book. Omit it and one is generated
                   --opening-plies K  random plies when generating a book (default 8)
                   --pairs N          opening pairs, two games each (default 100)
