@@ -99,6 +99,19 @@ public final class NnueNetwork {
     final byte[] outputWeights;    // [L2]
     final int outputBias;
 
+    /**
+     * The dense weights widened to {@code int}, built once when the network loads.
+     *
+     * <p>The file stores them as bytes because that is what they are worth; inference reads them
+     * against {@code int} activations, and mixing the two widths costs a sign extension on every one
+     * of the seventeen thousand products at every leaf — and leaves the loop in a shape the JIT will
+     * not vectorise. Widening costs 68 kilobytes, which is nothing, and both these arrays sit in L2
+     * cache regardless.
+     */
+    final int[] l1WeightsWide;
+    final int[] l2WeightsWide;
+    final int[] outputWeightsWide;
+
     NnueNetwork(int qa, int qb,
                 short[] featureWeights, short[] featureBiases, byte[] l1Weights, int[] l1Biases,
                 byte[] l2Weights, int[] l2Biases, byte[] outputWeights, int outputBias) {
@@ -115,6 +128,18 @@ public final class NnueNetwork {
         this.l2Biases = l2Biases;
         this.outputWeights = outputWeights;
         this.outputBias = outputBias;
+
+        this.l1WeightsWide = widen(l1Weights);
+        this.l2WeightsWide = widen(l2Weights);
+        this.outputWeightsWide = widen(outputWeights);
+    }
+
+    private static int[] widen(byte[] values) {
+        int[] wide = new int[values.length];
+        for (int i = 0; i < values.length; i++) {
+            wide[i] = values[i];
+        }
+        return wide;
     }
 
     /**

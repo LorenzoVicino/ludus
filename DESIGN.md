@@ -935,6 +935,95 @@ The cost is the dense layers. The first one is 512 inputs into 32 neurons: sixte
 multiply-accumulates at every leaf, against a couple of hundred operations for the hand-crafted
 evaluation. The accumulator is already incremental and is not the bottleneck.
 
+#### Making it faster, and what the measurements actually said
+
+| | nodes/second | |
+|---|---:|---|
+| hand-crafted evaluation | 6,299,760 | the target |
+| network, first version | 328,764 | 19× slower |
+| after widening the weights to `int` | 793,566 | **2.4× from a ten-line change** |
+| with the Vector API | 866,617 | +9% on top |
+
+**The ten-line change was worth more than the SIMD.** The file stores dense weights as bytes because
+that is what they are worth, and inference multiplied them against `int` activations — a sign
+extension on every one of seventeen thousand products, in a loop shape the JIT will not vectorise.
+Widening them once at load costs 68 kilobytes and removed both problems.
+
+The explicit Vector API then added only nine percent, and the reason is worth recording: **C2 had
+already vectorised the widened loop by itself.** Integer addition can be reordered freely, so an
+integer reduction is something the JIT is allowed to vectorise and does. The common assumption that
+hand-vectorising is required to get SIMD out of the JVM is, at least here, wrong — and it took a
+measurement to find out rather than an afternoon of guessing.
+
+The Vector API code stays anyway. It is nine percent for free at run time, it is verified to agree
+with the scalar loop exactly on every length from zero to six hundred, and it is the foundation for
+the change that would actually matter: **int8 lanes**. A 256-bit register holds thirty-two bytes
+against eight ints, so working in the width the weights are actually stored in is worth roughly
+another fourfold — which is how the real implementations reach millions of nodes per second.
+
+`SPECIES_PREFERRED` asks the JVM for the widest registers the CPU has rather than hardcoding a width:
+eight lanes here on AVX2, sixteen on AVX-512, four without either, same source. That portability is
+the argument for the Vector API over hand-unrolling, more than the raw speed is.
+
+**The scalar path is kept working and tested, not merely present.** It is the correctness reference,
+and it is what actually runs in a GUI: `jdk.incubator.vector` has to be asked for with
+`--add-modules`, and every GUI launches an engine as a bare `java -jar`. So the fast class is loaded
+reflectively and its absence is a configuration fact rather than an error.
+
+#### Speed was real, and not the answer
+
+With inference 2.6 times faster, the match was re-run: **−541 ± 133**, against −589 before. Fifty Elo
+for a 2.6× speedup. Real, and nowhere near enough — which retires the hypothesis rather than
+confirming it, and is why it was re-measured instead of assumed.
+
+So the network was interrogated directly rather than theorised about further. It is not broken:
+
+```
+starting position          +29 cp        white a queen up      +976 cp
+white a queen down         -966 cp       white a rook up       +573 cp
+king and queen v king      +869 cp       the mirror            -828 cp
+```
+
+It understands material perfectly well. And the data was not the obvious problem either — 35% of the
+training positions are beyond ±300 centipawns, so it saw plenty of imbalance.
+
+#### What it actually is
+
+Comparing the two evaluations on the same positions, which is what `bench --compare` exists for:
+
+| position | hand-crafted | network | difference |
+|---|---:|---:|---:|
+| opening | 10 | 30 | +20 |
+| Kiwipete | 115 | 150 | +35 |
+| quiet middlegame | 10 | 6 | −4 |
+| tactical middlegame | 135 | 108 | −27 |
+| **rook endgame** | **−31** | **+269** | **+300** |
+| **pawn endgame** | **65** | **158** | **+93** |
+| **rook endgame** | **−356** | **−539** | **−183** |
+
+Mean absolute difference: 88 centipawns.
+
+**In the middlegame the network reproduces the hand-crafted evaluation to within a few tens of
+centipawns. In endgames it is wrong by up to three hundred.** Both halves of that matter:
+
+- Where it agrees, it has **no upside**. Its labels came from searches by the very evaluation it is
+  imitating, so at best it reproduces its teacher — while costing seven times as much to compute. A
+  faithful copy at seven times the price is strictly worse, and no amount of extra data from the same
+  teacher changes that.
+- Where it disagrees, it is **wrong**. Self-play games between equal engines mostly end in the
+  middlegame or by the fifty-move rule, so endgames are thin in the data — and endgames are exactly
+  where the tapered evaluation behaves differently, with the king becoming a fighting piece.
+
+That is the whole −541, in three measured parts: two plies given up to speed, no gain where it copies
+correctly, and real losses where it copies badly.
+
+#### What would actually fix it
+
+Not more data from the same teacher. **A better teacher** — labels from much deeper searches, so the
+network learns something the hand-crafted evaluation does not already encode — and **endgame
+coverage**, which self-play between equals will not produce on its own and which usually comes from
+seeding games from endgame positions rather than only from the opening.
+
 #### What this reorders
 
 **M5's Vector API work is a prerequisite for M4's exit criterion, not a follow-on.** A network that

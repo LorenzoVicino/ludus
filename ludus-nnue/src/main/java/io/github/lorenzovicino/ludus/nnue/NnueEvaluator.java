@@ -16,6 +16,12 @@ import io.github.lorenzovicino.ludus.eval.Evaluator;
  */
 public final class NnueEvaluator implements Evaluator {
 
+    /**
+     * Chosen once for the process. Only one implementation is ever loaded, so the call site stays
+     * monomorphic and the JIT inlines through it.
+     */
+    private static final DotProduct DOT = DotProduct.best();
+
     private final NnueNetwork network;
     private final Accumulator accumulator;
 
@@ -38,13 +44,11 @@ public final class NnueEvaluator implements Evaluator {
         clip(accumulator.perspective(us), 0);
         clip(accumulator.perspective(Pieces.flip(us)), NnueNetwork.HIDDEN);
 
-        propagate(activations, NnueNetwork.L1_INPUTS, network.l1Weights, network.l1Biases, layerOne);
-        propagate(layerOne, NnueNetwork.L1, network.l2Weights, network.l2Biases, layerTwo);
+        propagate(activations, NnueNetwork.L1_INPUTS, network.l1WeightsWide, network.l1Biases, layerOne);
+        propagate(layerOne, NnueNetwork.L1, network.l2WeightsWide, network.l2Biases, layerTwo);
 
-        int output = network.outputBias;
-        for (int i = 0; i < NnueNetwork.L2; i++) {
-            output += layerTwo[i] * network.outputWeights[i];
-        }
+        int output = network.outputBias
+                + DOT.of(layerTwo, network.outputWeightsWide, 0, NnueNetwork.L2);
 
         // Back out of the fixed-point units the layers accumulate in, and into centipawns. In long,
         // because the product of a wide activation scale and 400 leaves an int with no headroom.
@@ -65,13 +69,9 @@ public final class NnueEvaluator implements Evaluator {
         }
     }
 
-    private void propagate(int[] input, int inputSize, byte[] weights, int[] biases, int[] output) {
+    private void propagate(int[] input, int inputSize, int[] weights, int[] biases, int[] output) {
         for (int neuron = 0; neuron < output.length; neuron++) {
-            int sum = biases[neuron];
-            int base = neuron * inputSize;
-            for (int i = 0; i < inputSize; i++) {
-                sum += input[i] * weights[base + i];
-            }
+            int sum = biases[neuron] + DOT.of(input, weights, neuron * inputSize, inputSize);
             output[neuron] = clippedRelu(divideRounding(sum, network.qb()), network.qa());
         }
     }
@@ -112,5 +112,10 @@ public final class NnueEvaluator implements Evaluator {
     /** Exposed for the invariant test, which is the only thing that should care. */
     Accumulator accumulator() {
         return accumulator;
+    }
+
+    /** Which inner loop this process resolved to, for the benchmark and for {@code info string}. */
+    public static String inferencePath() {
+        return DOT.name();
     }
 }

@@ -47,13 +47,22 @@ public final class BenchMain {
     public static int run(String[] args) throws Exception {
         int depth = 8;
         Path network = null;
+        boolean compare = false;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--depth" -> depth = Integer.parseInt(value(args, ++i, "--depth"));
                 case "--nnue" -> network = Path.of(value(args, ++i, "--nnue"));
+                case "--compare" -> compare = true;
                 default -> throw new IllegalArgumentException("unknown option " + args[i]);
             }
+        }
+
+        if (compare) {
+            if (network == null) {
+                throw new IllegalArgumentException("--compare needs --nnue");
+            }
+            return compareEvaluations(NnueNetwork.load(network));
         }
 
         Evaluator evaluator = network == null
@@ -80,6 +89,42 @@ public final class BenchMain {
         System.out.printf(Locale.ROOT,
                 "%-28s depth %d  %,12d nodes  %6d ms  %,10d nodes/s%n",
                 label, depth, nodes, millis, nps);
+        return 0;
+    }
+
+    /**
+     * Prints what each evaluation says about the same positions.
+     *
+     * <p>A network trained on scores its own engine produced can only ever approximate that engine,
+     * and an approximation that costs seven times as much to compute is strictly worse. This is how
+     * to tell whether that is what happened: if the two columns track each other closely, the network
+     * learned to imitate rather than to judge, and the fix is a better teacher rather than more data
+     * from the same one.
+     */
+    private static int compareEvaluations(NnueNetwork network) {
+        HandCraftedEvaluator handCrafted = new HandCraftedEvaluator();
+        NnueEvaluator networkEvaluator = new NnueEvaluator(network);
+
+        System.out.printf("%-46s %10s %10s %8s%n", "position", "hand", "network", "diff");
+        long totalAbsoluteDifference = 0;
+        int count = 0;
+
+        for (String fen : POSITIONS) {
+            Board board = Board.fromFen(fen);
+            networkEvaluator.reset(board);
+
+            int hand = handCrafted.evaluate(board);
+            int learned = networkEvaluator.evaluate(board);
+            totalAbsoluteDifference += Math.abs(learned - hand);
+            count++;
+
+            System.out.printf("%-46s %10d %10d %+8d%n",
+                    fen.substring(0, Math.min(44, fen.length())), hand, learned, learned - hand);
+        }
+
+        System.out.printf("%nmean absolute difference: %d centipawns over %d positions%n",
+                totalAbsoluteDifference / count, count);
+        System.out.println("inference path: " + NnueEvaluator.inferencePath());
         return 0;
     }
 

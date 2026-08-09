@@ -27,4 +27,35 @@
       <artifactId>ludus-eval</artifactId>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        The Vector API is an incubator module, so it has to be requested to compile against and again
+        to run. This is the reason the network lives in a module of its own: the flag stays here
+        instead of spreading over a build that does not need it.
+
+        At run time it is optional. A GUI launches an engine as a bare `java -jar`, so the vectorised
+        class simply fails to load there and DotProduct falls back to the scalar loop.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <compilerArgs>
+            <arg>--add-modules</arg>
+            <arg>jdk.incubator.vector</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!-- So the tests exercise the path a benchmark run will actually take. -->
+          <argLine>-Xmx2g --add-modules jdk.incubator.vector</argLine>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
 </project>

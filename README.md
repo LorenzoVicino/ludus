@@ -30,21 +30,25 @@ full recomputation bit for bit over 73,862 positions, and the engine reproduces 
 to within 4 centipawns — but the first trained network lost to the hand-crafted evaluation by
 **−589 ± 147 Elo**, so it is not the default.
 
-The obvious explanation was too little training data. The benchmark said otherwise:
+Three plausible explanations were tested and two were wrong, which is the part worth reading.
 
-```
-hand-crafted        depth 8   2,160,818 nodes    346 ms   6,245,138 nodes/s
-network             depth 8   3,097,290 nodes   9421 ms     328,764 nodes/s
-```
+**"It runs it wrongly."** No — the engine reproduces PyTorch's own answer to within 4 centipawns, and
+the incremental accumulator matches a full recomputation bit for bit.
 
-**Nineteen times slower** — two to three plies of depth given up before the network's opinion matters
-at all. That reorders the remaining work: making inference fast is now a prerequisite for the network
-being worth training further, not a follow-on. [`DESIGN.md`](DESIGN.md) §9.05 has the account.
+**"It is too slow."** Partly. It was nineteen times slower than the hand-crafted evaluation; widening
+the weights to `int` and adding the Vector API took that to seven. Re-running the match bought fifty
+Elo. Real, and nowhere near the gap.
 
-Two measurements made that call rather than a guess. The agreement test separates "the network is
-weak" from "the engine runs it wrongly"; the benchmark separates "searches worse" from "searches
-slower". Without either, the plausible story would have been believed and weeks of generating
-positions would have bought nothing.
+**"It needs more data."** No. It understands material perfectly — plus 976 centipawns for an extra
+queen — and 35% of its training positions are already beyond ±300.
+
+What it actually is, from comparing the two evaluations position by position: **in the middlegame the
+network reproduces the hand-crafted evaluation within a few tens of centipawns; in endgames it is
+wrong by up to three hundred.** Its labels came from searches by the evaluation it is imitating, so
+where it copies well it has no upside and costs seven times as much, and where it copies badly it
+loses games. The fix is a better teacher and endgame coverage, not more of the same data.
+
+[`DESIGN.md`](DESIGN.md) §9.05 has the full account with the numbers.
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
