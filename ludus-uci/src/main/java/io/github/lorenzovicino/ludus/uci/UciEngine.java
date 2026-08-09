@@ -8,12 +8,15 @@ import io.github.lorenzovicino.ludus.core.Pieces;
 import io.github.lorenzovicino.ludus.core.Squares;
 import io.github.lorenzovicino.ludus.eval.Evaluator;
 import io.github.lorenzovicino.ludus.eval.HandCraftedEvaluator;
+import io.github.lorenzovicino.ludus.nnue.NnueEvaluator;
+import io.github.lorenzovicino.ludus.nnue.NnueNetwork;
 import io.github.lorenzovicino.ludus.search.Search;
 import io.github.lorenzovicino.ludus.search.SearchInfo;
 import io.github.lorenzovicino.ludus.search.SearchLimits;
 import io.github.lorenzovicino.ludus.search.SearchResult;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -42,8 +45,14 @@ public final class UciEngine implements Runnable {
 
     private final BufferedReader input;
     private final Consumer<String> output;
-    private final Search search;
     private final ExecutorService worker;
+
+    // Not final: loading a network replaces the evaluation, and the search holds it for its lifetime.
+    // This field is the seam of DESIGN.md §6 made concrete — the one place in the program that knows
+    // which evaluation is in use.
+    private Search search;
+    private int hashMegabytes = DEFAULT_HASH_MB;
+    private String evalFile = "";
 
     private Board board = Board.startPosition();
     private Future<?> running;
@@ -127,6 +136,9 @@ public final class UciEngine implements Runnable {
         send("id name " + NAME);
         send("id author " + AUTHOR);
         send("option name Hash type spin default " + DEFAULT_HASH_MB + " min 1 max 1024");
+        // Empty means the hand-crafted evaluation. A host that points this at a network gets the
+        // network, and nothing else about the engine changes.
+        send("option name EvalFile type string default <empty>");
         send("uciok");
     }
 
@@ -151,14 +163,61 @@ public final class UciEngine implements Runnable {
         if (nameStart < 0 || valueStart < 0 || valueStart >= tokens.length) {
             return;
         }
+        // Both the name and the value can contain spaces — a network sits at a path like any other.
         String name = String.join(" ", Arrays.copyOfRange(tokens, nameStart, valueStart - 1));
-        if (!name.equalsIgnoreCase("Hash")) {
+        String value = String.join(" ", Arrays.copyOfRange(tokens, valueStart, tokens.length));
+
+        if (name.equalsIgnoreCase("Hash")) {
+            hashMegabytes = (int) Math.max(1, Math.min(parseLong(value, DEFAULT_HASH_MB), 1024));
+            search.setHashSize(hashMegabytes);
+            send("info string hash set to " + hashMegabytes + " MB");
+        } else if (name.equalsIgnoreCase("EvalFile")) {
+            loadEvaluation(value);
+        }
+    }
+
+    /**
+     * Swaps the evaluation the search runs with.
+     *
+     * <p>This method is the whole return on the seam taken in M1. Nothing in {@code ludus-search}
+     * changed to make a neural network possible, and nothing in it can even name the class being
+     * constructed here — the module graph turns that into a compile error rather than a convention.
+     *
+     * <p>An empty path goes back to the hand-crafted evaluation, which is also what a failed load
+     * does: an engine that answers with no evaluation at all is worse than one answering with the
+     * old one.
+     */
+    private void loadEvaluation(String path) {
+        if (path.isBlank()) {
+            replaceSearch(new HandCraftedEvaluator());
+            evalFile = "";
+            send("info string evaluation: hand-crafted");
             return;
         }
-        long megabytes = numberAfter(tokens, valueStart, DEFAULT_HASH_MB);
-        int clamped = (int) Math.max(1, Math.min(megabytes, 1024));
-        search.setHashSize(clamped);
-        send("info string hash set to " + clamped + " MB");
+        try {
+            NnueNetwork network = NnueNetwork.load(Path.of(path.trim()));
+            replaceSearch(new NnueEvaluator(network));
+            evalFile = path.trim();
+            send("info string evaluation: network from " + evalFile);
+        } catch (IOException | RuntimeException e) {
+            send("info string could not load " + path.trim() + " (" + e.getMessage()
+                    + "), keeping the hand-crafted evaluation");
+        }
+    }
+
+    private void replaceSearch(Evaluator evaluator) {
+        Search replacement = new Search(evaluator);
+        replacement.setHashSize(hashMegabytes);
+        replacement.setListener(this::report);
+        search = replacement;
+    }
+
+    private static long parseLong(String text, long fallback) {
+        try {
+            return Long.parseLong(text.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     private void setPosition(String[] tokens) {

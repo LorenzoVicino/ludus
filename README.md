@@ -27,6 +27,44 @@ have been a feature that did nothing. The full account is in [`DESIGN.md`](DESIG
 
 The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
 
+## Architecture
+
+```mermaid
+graph LR
+  subgraph shipped["shipped in ludus.jar"]
+    uci["<b>ludus-uci</b><br/>protocol<br/><i>composition root</i>"]
+    search["<b>ludus-search</b><br/>alpha-beta, PVS<br/>table, pruning"]
+    eval["<b>ludus-eval</b><br/><b>Evaluator</b> interface<br/>+ hand-crafted"]
+    nnue["<b>ludus-nnue</b><br/>network, accumulator<br/>quantised inference"]
+    core["<b>ludus-core</b><br/>board, magic bitboards<br/>movegen, perft, SEE"]
+  end
+
+  tools["<b>ludus-tools</b><br/>match runner, SPRT<br/>self-play, status page"]
+
+  uci --> search
+  uci -- "chooses one" --> nnue
+  uci --> eval
+  search --> eval
+  nnue -. "implements" .-> eval
+  search --> core
+  eval --> core
+  nnue --> core
+  tools --> search
+  tools --> core
+```
+
+**The arrow that is missing is the design.** There is no edge from `ludus-search` to `ludus-nnue`,
+and there never will be: the search depends on an interface, and the only module that knows which
+implementation exists is the one at the top. Swapping a hand-written evaluation for a neural network
+changes one line in the composition root and not a character of the search.
+
+That boundary was drawn in M1, months before there was anything to put behind it, and it has not
+moved since. It is also enforced rather than agreed: calling network code from the search is a
+compile error, not a code-review comment.
+
+`ludus-tools` sits outside the shipped jar. It is the only place with a third-party dependency, which
+is how the engine a GUI launches has none at all.
+
 ## Why two acts
 
 Act I is a conventional engine: bitboards, magic bitboard move generation, alpha-beta search
@@ -78,7 +116,33 @@ a clock, which are different questions.
 ### Spreading a match across machines
 
 A match is 300 to 500 games and its wall time is what limits how fast patches can be evaluated, so
-the runner also works as a coordinator and any number of workers, with RabbitMQ in between:
+the runner also works as a coordinator and any number of workers, with RabbitMQ in between.
+
+```mermaid
+graph LR
+  subgraph m["measuring a patch"]
+    C["coordinator"] -- "opening pairs" --> MJ[("ludus.match.jobs")]
+    MJ --> W1["worker<br/>2 engines"]
+    MJ --> W2["worker<br/>2 engines"]
+    W1 -- "W-D-L" --> MR[("ludus.match.results")]
+    W2 --> MR
+    MR --> C
+  end
+
+  subgraph s["generating training data"]
+    K["collector"] -- "batches of games" --> SJ[("ludus.selfplay.jobs")]
+    SJ --> G1["generator"]
+    SJ --> G2["generator"]
+    G1 -- "labelled positions" --> SS[("ludus.selfplay.samples")]
+    G2 --> SS
+    SS -- "written as they arrive" --> D["dataset"]
+    SS --> K
+  end
+```
+
+Both halves are the same shape — a queue of work and a queue of results — which is why the broker
+plumbing is one class rather than two. Nothing is acknowledged until the work is finished and its
+output is published, so a machine that dies hands its job back instead of losing it.
 
 ```bash
 docker compose up -d                       # the broker

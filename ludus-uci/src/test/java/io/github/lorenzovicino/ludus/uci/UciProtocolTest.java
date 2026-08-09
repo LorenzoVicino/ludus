@@ -7,12 +7,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import io.github.lorenzovicino.ludus.core.Board;
 import io.github.lorenzovicino.ludus.core.Move;
 import io.github.lorenzovicino.ludus.core.MoveGenerator;
+import io.github.lorenzovicino.ludus.nnue.NnueNetwork;
 import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.io.StringReader;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Golden input and output over the protocol.
@@ -132,6 +138,56 @@ class UciProtocolTest {
         // A host that dies mid-game closes the pipe rather than saying goodbye.
         List<String> replies = converse("position startpos", "go depth 2");
         assertMoveIsLegal(Board.startPosition(), bestMove(replies));
+    }
+
+    @Test
+    void theEngineOffersToLoadANetwork() {
+        assertTrue(converse("uci", "quit").stream()
+                        .anyMatch(line -> line.startsWith("option name EvalFile")),
+                "A host has to be told the option exists before it can set it");
+    }
+
+    @Test
+    void loadingANetworkSwapsTheEvaluationAndTheEngineKeepsPlaying(@TempDir Path directory)
+            throws IOException {
+        // The payoff of the seam taken in M1: the search is handed a completely different evaluation
+        // and neither it nor the protocol layer needed changing to allow it. Random weights are fine
+        // here — what is under test is the swap, not the chess.
+        Path networkFile = directory.resolve("random.nnue");
+        try (OutputStream out = Files.newOutputStream(networkFile)) {
+            NnueNetwork.random(4242L).store(out);
+        }
+
+        List<String> replies = converse(
+                "setoption name EvalFile value " + networkFile,
+                "position startpos",
+                "go depth 3",
+                "quit");
+
+        assertTrue(replies.stream().anyMatch(line -> line.contains("evaluation: network from")),
+                () -> "The network was not picked up:\n" + String.join("\n", replies));
+        assertMoveIsLegal(Board.startPosition(), bestMove(replies));
+    }
+
+    @Test
+    void aMissingNetworkFallsBackInsteadOfDying() {
+        // An engine that answers with no evaluation at all is worse than one answering with the old
+        // one, and a GUI gives no second chance to explain.
+        List<String> replies = converse(
+                "setoption name EvalFile value C:/nowhere/absent.nnue",
+                "position startpos",
+                "go depth 3",
+                "quit");
+
+        assertTrue(replies.stream().anyMatch(line -> line.contains("could not load")),
+                () -> "The failure should be reported:\n" + String.join("\n", replies));
+        assertMoveIsLegal(Board.startPosition(), bestMove(replies));
+    }
+
+    @Test
+    void anEmptyEvalFileGoesBackToTheHandCraftedEvaluation() {
+        List<String> replies = converse("setoption name EvalFile value ", "isready", "quit");
+        assertTrue(replies.contains("readyok"));
     }
 
     private static List<String> converse(String... commands) {

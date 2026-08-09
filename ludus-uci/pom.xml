@@ -30,6 +30,14 @@
       <groupId>io.github.lorenzovicino</groupId>
       <artifactId>ludus-search</artifactId>
     </dependency>
+    <!--
+      The composition root is the only module that depends on both evaluations, because it is the
+      only one that chooses between them. ludus-search deliberately cannot see this dependency.
+    -->
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-nnue</artifactId>
+    </dependency>
   </dependencies>
 
   <build>
