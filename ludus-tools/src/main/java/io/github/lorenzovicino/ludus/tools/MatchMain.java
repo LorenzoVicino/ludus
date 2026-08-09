@@ -2,6 +2,8 @@ package io.github.lorenzovicino.ludus.tools;
 
 import io.github.lorenzovicino.ludus.tools.dist.CoordinatorMain;
 import io.github.lorenzovicino.ludus.tools.dist.WorkerMain;
+import io.github.lorenzovicino.ludus.tools.selfplay.CollectorMain;
+import io.github.lorenzovicino.ludus.tools.selfplay.GeneratorMain;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -77,6 +79,8 @@ public final class MatchMain {
             case "local" -> runLocal(rest);
             case "worker" -> WorkerMain.run(rest);
             case "coordinator" -> CoordinatorMain.run(rest);
+            case "generate" -> GeneratorMain.run(rest);
+            case "collect" -> CollectorMain.run(rest);
             // Options straight away is the original single-mode invocation, kept working.
             default -> args[0].startsWith("--")
                     ? runLocal(args)
@@ -198,6 +202,8 @@ public final class MatchMain {
                   local        run the whole match here (default if options come first)
                   coordinator  hand out openings over a broker and collect results
                   worker       play openings a coordinator scheduled
+                  collect      schedule self-play and write the training dataset as it arrives
+                  generate     play self-play games and publish labelled positions
 
                 LOCAL
                   --engine-a CMD     command that launches the candidate
@@ -225,6 +231,18 @@ public final class MatchMain {
                   --movetime MS, --max-plies N     as above
                   --concurrency K    engine pairs on this machine (default 1)
                   --idle-timeout S   exit after this long with no work (default 120)
+
+                COLLECT
+                  --out PATH         dataset file (default training/data/selfplay.txt)
+                  --samples N        stop once this many positions are written (default 100000)
+                  --games-per-job N  games per queued job (default 50)
+                  --depth D          search depth per move (default 6)
+                  --append           add to the dataset instead of replacing it
+                  --broker URI, --seed S, --idle-timeout MIN
+
+                GENERATE
+                  --concurrency K    games in parallel on this machine (default: cores / 2)
+                  --broker URI, --idle-timeout S
 
                 exit: 0 accepted, 1 rejected, 2 inconclusive, 3 error
 

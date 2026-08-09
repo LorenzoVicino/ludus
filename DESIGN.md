@@ -628,6 +628,50 @@ not know which is broken.
 `ludus-tools` hosts the self-play generator; the training script lives in `training/` as a separate
 Python project with its own `requirements.txt`. Do not try to make them share a build.
 
+#### The generation pipeline
+
+Built and running. Generators take jobs off a queue, play games, and publish batches of labelled
+positions; a collector writes the dataset as the batches arrive. Generation and training can
+therefore run at the same time on different machines, which for a project with a fixed amount of CPU
+is the practical arrangement rather than a showpiece — and it is the shape the whole thing was
+designed around.
+
+The search runs **in-process** here rather than through UCI. Training needs millions of positions and
+a subprocess round trip per move would dominate the cost; running the search directly also hands over
+its score, which is half of what a sample is.
+
+**Most positions are thrown away, and the filtering matters more than the volume.** A network trained
+on everything learns the noise as well as the signal:
+
+| Discarded | Why |
+|---|---|
+| In check | A static evaluation of a position under check describes something the network is not being asked to judge |
+| Best move is a capture | The position is mid-exchange, so its static score is the illusion quiescence exists to dispel. Training on it teaches the network to believe it |
+| Mate scores | Mate is distance, not evaluation, and a label of thirty thousand centipawns drags every weight it touches |
+| The opening plies | They come from random moves, so they sample the book rather than chess |
+
+**Both labels are from the side to move**, matching what the evaluation returns and what the network
+is asked to predict. Mixing the two conventions is a mistake that trains perfectly well and produces
+a network convinced one colour is winning.
+
+The result is stored as an integer, not a fraction. Writing a draw as `0.5` through a default
+formatter on this machine's Italian locale produces `0,5`, and a training file full of commas is a bug
+discovered days later, in Python.
+
+**Three checks on the first real run**, 4,013 samples from 4 batches:
+
+- Mean score **−1.3 centipawns**. With symmetric self-play and side-to-move scores it has to sit at
+  zero; anything else is a sign or perspective error.
+- Results **1389 / 1189 / 1435** across loss, draw and win — balanced, as the same engine on both
+  sides requires.
+- Consecutive positions from one game read `w, b, w` with scores `75, −65, 70` and results `2, 0, 2`.
+  Sign and result flip together with the turn, which is the perspective working.
+
+**One deliberate difference from the match pipeline.** A generator publishes every batch before
+acknowledging its job, so a crash in between replays the job and can duplicate samples. Duplicates are
+harmless in training data and losing hours of generation is not, so at-least-once is the right trade
+here — where for a match tally, counting a game twice would corrupt the verdict.
+
 ---
 
 ## 8. Testing strategy

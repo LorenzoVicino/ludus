@@ -99,6 +99,26 @@ worker holding a job the queue reads `3 ready, 1 unacknowledged`; kill the proce
 This is the only third-party runtime dependency in the project, and it lives in `ludus-tools`, which
 never ships inside the engine jar. The engine a GUI launches still has none.
 
+### Generating training data
+
+The same pipeline produces the positions the NNUE of Act II will be trained on. Generators play
+self-play games and publish batches of labelled positions; a collector writes the dataset as they
+arrive, so generation and training can run at the same time on different machines:
+
+```bash
+java -jar ludus-tools/target/ludus-match.jar collect --samples 2000000 --out training/data/selfplay.txt
+
+java -jar ludus-tools/target/ludus-match.jar generate --concurrency 6   # on each machine
+```
+
+Most positions are discarded, and the filtering matters more than the volume: nothing while in check,
+nothing where the best move is a capture, no mate scores, and none of the random opening plies. A
+network trained on everything learns the noise too.
+
+Both labels — the search score and the game result — are from the side to move. On the first run of
+4,013 samples the mean score came out at −1.3 centipawns, which is the check that matters: with
+symmetric self-play it has to sit at zero, and anything else means a sign or perspective error.
+
 A third invariant guards Act II: the incrementally updated accumulator must be bit-for-bit
 identical to a full recomputation, verified by property tests over random games. A bug there
 does not crash anything — it just quietly makes the engine play worse.

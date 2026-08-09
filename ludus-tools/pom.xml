@@ -22,6 +22,19 @@
       <groupId>io.github.lorenzovicino</groupId>
       <artifactId>ludus-core</artifactId>
     </dependency>
+    <!--
+      Self-play data generation runs the search in-process rather than through UCI. Millions of
+      positions are needed and a subprocess round trip per move would dominate the cost; running it
+      directly also hands us the search score, which is half of what a training sample is.
+    -->
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-eval</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-search</artifactId>
+    </dependency>
 
     <!--
       The only third-party runtime dependency in the whole project, and it is confined here on
