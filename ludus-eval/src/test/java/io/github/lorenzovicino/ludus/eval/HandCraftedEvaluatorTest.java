@@ -72,10 +72,19 @@ class HandCraftedEvaluatorTest {
                 "A pawn with a clear path ahead must not score worse than one staring at a blocker");
     }
 
+    /**
+     * The two positions differ only in where the white king stands, so the endgame king table is the
+     * only thing that can separate them.
+     *
+     * <p>This used two bare kings, which stopped working when the evaluation learned to return zero for
+     * material that cannot mate — correctly, because in a dead draw it does not matter where the king
+     * stands. A pawn each keeps the material equal, keeps the phase in the endgame, and makes
+     * centralisation something the position can actually be judged on.
+     */
     @Test
     void theKingWantsTheCentreOnceThePiecesAreGone() {
-        Board central = Board.fromFen("8/8/8/3K4/8/8/8/7k w - - 0 1");
-        Board cornered = Board.fromFen("K7/8/8/8/8/8/8/7k w - - 0 1");
+        Board central = Board.fromFen("7k/p7/8/3K4/8/7P/8/8 w - - 0 1");
+        Board cornered = Board.fromFen("7k/p7/8/8/8/7P/8/K7 w - - 0 1");
         assertTrue(evaluator.evaluate(central) > evaluator.evaluate(cornered),
                 "The endgame king table must reward centralisation");
     }

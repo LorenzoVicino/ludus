@@ -177,8 +177,49 @@ public final class HandCraftedEvaluator implements Evaluator {
         }
     }
 
+    /**
+     * Whether neither side has the material to deliver mate, making the position a draw whatever the
+     * pieces are doing.
+     *
+     * <p>Counting material without this is wrong in a way that is easy to miss and expensive twice
+     * over. {@code 8/8/4k3/8/8/2KB4/8/8} — king and bishop against a bare king, a dead draw — read
+     * <strong>+368 centipawns</strong> before this check existed: more than a third of a queen for a
+     * position no legal sequence can win.
+     *
+     * <p>The second cost is the one that mattered here. Training labels come from searches performed
+     * with this evaluation, so every drawn ending it overvalued taught the network the same error
+     * faithfully. It also showed up in the data as a contradiction between the two halves of a label:
+     * across generated endgame positions the search averaged ±400 centipawns while 68% of the games
+     * ended drawn.
+     *
+     * <p>The rule is deliberately the conservative one — no pawns, no rooks, no queens, and at most one
+     * minor piece each. With at most two minors on the board split one apiece, there is no forced mate.
+     * K+B+B and K+B+N against a bare king are real wins and are left alone; K+N+N is not forced but is
+     * not claimed here either, because "cannot be forced" and "is a draw" are different statements and
+     * only the second one belongs in an evaluation that returns zero.
+     */
+    private static boolean isInsufficientMaterial(Board board) {
+        if (board.pieces(Pieces.WHITE, Pieces.PAWN) != 0 || board.pieces(Pieces.BLACK, Pieces.PAWN) != 0
+                || board.pieces(Pieces.WHITE, Pieces.ROOK) != 0
+                || board.pieces(Pieces.BLACK, Pieces.ROOK) != 0
+                || board.pieces(Pieces.WHITE, Pieces.QUEEN) != 0
+                || board.pieces(Pieces.BLACK, Pieces.QUEEN) != 0) {
+            return false;
+        }
+        return minorCount(board, Pieces.WHITE) <= 1 && minorCount(board, Pieces.BLACK) <= 1;
+    }
+
+    private static int minorCount(Board board, int color) {
+        return Bitboards.count(board.pieces(color, Pieces.KNIGHT))
+                + Bitboards.count(board.pieces(color, Pieces.BISHOP));
+    }
+
     @Override
     public int evaluate(Board board) {
+        if (isInsufficientMaterial(board)) {
+            return 0;
+        }
+
         int midgame = 0;
         int endgame = 0;
         int phase = 0;
