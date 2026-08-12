@@ -62,6 +62,15 @@ Step "does it beat the evaluation its labels came from?"
 Step "speed"
 & java -jar $jar bench --depth 8 --nnue $Nnue
 
-Write-Host "`nIf the network won the prediction test, the SPRT is worth running:" -ForegroundColor Yellow
-Write-Host "  java -jar $jar match --sprt --engine-a <baseline jar> --engine-b <this jar>"
-Write-Host "If it did not, the SPRT will only spend hours confirming it." -ForegroundColor Yellow
+Step "next step"
+Write-Host "If the network won the near-level bands, the SPRT is worth its hours:" -ForegroundColor Yellow
+Write-Host ""
+# One jar on both sides, differing only in the EvalFile option. That is the cleanest form this A/B can
+# take: two builds could differ in ways nobody intended, whereas one binary given two evaluations
+# cannot.
+Write-Host "  java -jar $jar local --sprt 0 10 --pairs 250 --movetime 100 --concurrency 8 ``"
+Write-Host "      --engine-a `"java -jar ludus-uci/target/ludus.jar`" ``"
+Write-Host "      --engine-b `"java -jar ludus-uci/target/ludus.jar`" ``"
+Write-Host "      --option-b `"EvalFile=$Nnue`""
+Write-Host ""
+Write-Host "If it lost them, the SPRT will only spend those hours agreeing." -ForegroundColor Yellow
