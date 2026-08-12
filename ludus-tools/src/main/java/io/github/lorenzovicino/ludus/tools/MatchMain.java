@@ -90,6 +90,7 @@ public final class MatchMain {
             case "collect" -> CollectorMain.run(rest);
             case "relabel" -> RelabelMain.run(rest);
             case "bench" -> BenchMain.run(rest);
+            case "ask" -> AskMain.run(rest);
             // Options straight away is the original single-mode invocation, kept working.
             default -> args[0].startsWith("--")
                     ? runLocal(args)
@@ -238,6 +239,7 @@ public final class MatchMain {
                   generate     play self-play games and publish labelled positions
                   relabel      replace labels that chess theory settles
                   bench        node rate, and how well a network predicts its labels
+                  ask          what move each evaluation plays, at equal depth
 
                 LOCAL
                   --engine-a CMD     command that launches the candidate

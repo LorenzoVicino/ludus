@@ -1342,6 +1342,59 @@ readable.
 It also retires the confident absolute figure in §9.08: 109 centipawns of network error was 45–64
 centipawns of network error plus label noise, and the noise was the larger half.
 
+### 9.10 The link that was never checked, and what asking it to play revealed
+
+The curve of §9.09 established **data → accuracy**. It did not establish **accuracy → Elo**, and that
+second link is the one the eighteen hours of generation would have been spent on faith in.
+
+Checking it costs one match. The lambda-1.0 network is 2.4× more accurate near level — 0.029 against
+0.069 — and measures **−458.5 ± 253.3 Elo** where the worse network measured −529. The intervals overlap
+almost entirely. **Accuracy at this magnitude does not buy Elo**, so more data was the wrong thing to buy.
+
+So ask it what it plays instead. Same positions, same depth, both evaluations, no protocol in between:
+
+| Position | Hand-written | Network |
+|---|---|---|
+| Start | e2e4 +21 | e2e4 +7 |
+| Kiwipete | d5e6 +36 | e2a6 −32 |
+| Locked pawn ending | f7f6 **+25** | f7e7 **+271** |
+| Rook ending | b4f4 **+18** | b4f4 **+129** |
+| King and pawn v. king | **e1d2** +155 | **e2e4** +235 |
+
+Four of eight moves agree. The scores do not: a locked, dead-drawn pawn ending reads +271.
+
+**The last row names the problem.** With king and pawn against a bare king, the hand-written evaluation
+moves the *king* — correct technique, since the king must escort the pawn — and the network pushes the
+pawn at once, which is the standard beginner's error.
+
+#### Why no amount of data fixes that
+
+The feature transformer is **additive**. A position is 768 facts of the form *piece on square*, and the
+accumulator sums one column per piece present. A sum of independent per-piece vectors cannot represent
+*"the pawn on e4 is strong **if** my king is on e5"* — that interaction is not in the sum, and the dense
+layers behind it see only the 256-dimensional total. A function class cannot be taught something it
+cannot express.
+
+This is precisely why real engines index features by king square — **HalfKP** — so that the
+accumulator's weights are king-conditional. It sits in the milestone table under M5 as tuning. It is not
+tuning; it is the reason the current network cannot do endgame technique, and it moves ahead of "more
+data".
+
+**The curve said so already, read properly.** The 0–50 band improves steadily with data: that is the
+memorisable part. The wider bands sit at 0.041 and 0.043 and **do not move at all** across an eightfold
+increase. That plateau was never the data running out. It is the ceiling of what a sum of piece-square
+vectors can say about a position.
+
+#### On the tooling this needed
+
+`ask` calls the search directly rather than driving UCI from a shell, after three attempts at the latter
+measured the harness instead of the engine. Redirecting a file in makes the search stop early — end of
+input is treated as `quit`, so it reports whatever depth it happened to reach. Keeping the pipe open from
+a script deadlocked instead: the engine blocked writing to a full stdout while the script blocked reading
+for a line that had already gone past. Both produced numbers, which is the dangerous part.
+
+Equal depth rather than equal time, so that a bad move is the evaluation's fault and not the clock's.
+
 ### 9.1 M6 — the status page
 
 Last by design: it collects the numbers the earlier milestones produce, so those have to exist first.
