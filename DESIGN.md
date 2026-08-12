@@ -415,7 +415,8 @@ serves both ordering and quiescence pruning, and it is subtle code.
 ### 5.5 Pruning and reductions — one at a time
 
 **Landed and measured:** null move pruning, late move reductions. **Next:** futility pruning, reverse
-futility.
+futility — reverse futility is written and waiting for its match on the `search-reverse-futility`
+branch, because an unmeasured patch has no business on `main`.
 
 **The rule: one patch at a time, each with its own SPRT.** Add three together and watch the Elo drop,
 and you do not know which one did it. This is where the discipline of §1.2 repays the cost of having
@@ -1089,6 +1090,14 @@ quantity, and conflating them is what made 38% look acceptable in the first smok
 
 `DatasetBalanceTest` asserts the composition under deliberately lopsided yields, and runs the old
 policy through the same simulation so the property is demonstrably not free.
+
+**The distributed path has the same defect, less severely.** `collect` publishes a fixed proportion of
+endgame jobs, so it balances *games*, not *samples* — and an endgame game yields a different number of
+positions than an opening one. It is bounded by the samples-per-game ratio rather than by the ten-to-one
+speed ratio, so the skew is real but nothing like 91%. The honest fix is for the collector to classify
+the batches it already receives, by piece count, and top up whichever kind is behind: the queue then
+becomes a control loop rather than a fixed work list, which is a better argument for it being there than
+"work can be spread across machines" was.
 
 **The queue stopped being mandatory.** `collect --local` generates in-process across N threads with
 no broker at all. RabbitMQ earns its place when generation is spread across machines or run alongside

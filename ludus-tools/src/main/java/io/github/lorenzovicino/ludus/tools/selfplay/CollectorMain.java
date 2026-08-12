@@ -81,13 +81,10 @@ public final class CollectorMain {
                     threads, append);
         }
 
-        // A rough guess at samples per game, only used to decide how many jobs to queue. Over-queuing
-        // is harmless: the leftovers are purged once the target is reached.
-        int estimatedPerGame = 20;
-        int jobs = Math.max(1, targetSamples / Math.max(1, gamesPerJob * estimatedPerGame)) + 1;
-
         long written = 0;
+        long endgameWritten = 0;
         long batches = 0;
+        int nextJobId = 0;
 
         try (RabbitBroker broker = new RabbitBroker(uri, 4);
              BufferedWriter writer = Files.newBufferedWriter(out, StandardCharsets.UTF_8,
@@ -102,16 +99,17 @@ public final class CollectorMain {
                 System.out.printf("purged %d stale job(s)%n", stale);
             }
 
-            int endgameJobs = (int) Math.round(jobs * endgameFraction);
-            System.out.printf("queueing %d jobs of %d games at depth %d (%d from endgames), "
-                            + "target %,d samples%n",
-                    jobs, gamesPerJob, depth, endgameJobs, targetSamples);
-            for (int i = 0; i < jobs; i++) {
-                // Interleaved rather than grouped, so a run cut short still has both kinds in it.
-                boolean fromEndgame = endgameFraction > 0 && (i % Math.max(1, jobs / Math.max(1, endgameJobs)) == 0);
-                broker.publish(SelfPlayJob.JOBS_QUEUE,
-                        new SelfPlayJob(i, seed + i, gamesPerJob, depth, fromEndgame).encode());
-            }
+            System.out.printf("target %,d samples, %d games per job at depth %d, %.0f%% from endgames%n",
+                    targetSamples, gamesPerJob, depth, endgameFraction * 100);
+
+            // The queue is kept to a shallow window and refilled from what has actually arrived, rather
+            // than filled once from an estimate. Publishing the whole run up front fixes the
+            // composition in advance and gets it wrong for the same reason splitting the threads did:
+            // the two kinds of job do not produce the same number of samples, so a fixed proportion of
+            // jobs is not a fixed proportion of positions. Refilling makes the queue a control loop,
+            // which is a better reason for it to exist than spreading work across machines was.
+            nextJobId = topUp(broker, nextJobId, seed, gamesPerJob, depth,
+                    endgameFraction, written, endgameWritten);
             System.out.println("writing to " + out.toAbsolutePath() + ", waiting for generators");
 
             long deadline = System.nanoTime() + Duration.ofMinutes(idleMinutes).toNanos();
@@ -137,9 +135,18 @@ public final class CollectorMain {
                 raw.ack();
 
                 batches++;
-                written += body.lines().count();
+                long produced = body.lines().count();
+                written += produced;
+                if (looksLikeEndgame(body)) {
+                    endgameWritten += produced;
+                }
+
+                nextJobId = topUp(broker, nextJobId, seed, gamesPerJob, depth,
+                        endgameFraction, written, endgameWritten);
+
                 if (batches % 10 == 0) {
-                    System.out.printf("%,d samples in %d batches%n", written, batches);
+                    System.out.printf("%,d samples in %d batches, %.0f%% endgame%n",
+                            written, batches, 100.0 * endgameWritten / Math.max(1, written));
                 }
             }
 
@@ -150,9 +157,71 @@ public final class CollectorMain {
         }
 
         System.out.println();
-        System.out.printf(Locale.ROOT, "wrote %,d samples in %d batches to %s%n",
-                written, batches, out.toAbsolutePath());
+        System.out.printf(Locale.ROOT, "wrote %,d samples in %d batches (%.1f%% endgame) to %s%n",
+                written, batches, 100.0 * endgameWritten / Math.max(1, written), out.toAbsolutePath());
         return written > 0 ? 0 : 2;
+    }
+
+    /**
+     * Jobs are held at a shallow depth so the composition stays steerable.
+     *
+     * <p>Deep enough that generators never wait for work, shallow enough that a queued job is acted on
+     * soon after the decision to queue it. A thousand jobs queued up front cannot be steered at all.
+     */
+    private static final int QUEUE_WINDOW = 24;
+
+    /** Refills the job queue up to the window, choosing each job's kind from what has arrived. */
+    private static int topUp(RabbitBroker broker, int nextJobId, long seed, int gamesPerJob, int depth,
+                            double endgameFraction, long written, long endgameWritten)
+            throws Exception {
+        while (broker.depth(SelfPlayJob.JOBS_QUEUE) < QUEUE_WINDOW) {
+            // Before anything has arrived there is nothing to steer by, so the kind alternates in the
+            // target proportion by job index and the sample counts take over as soon as they exist.
+            boolean fromEndgame = written == 0
+                    // Bresenham: the count of endgame jobs tracks the target proportion exactly, so the
+                    // opening wave is interleaved rather than grouped.
+                    ? (int) ((nextJobId + 1) * endgameFraction) > (int) (nextJobId * endgameFraction)
+                    : wantsEndgame((int) endgameWritten, (int) written, endgameFraction);
+            broker.publish(SelfPlayJob.JOBS_QUEUE,
+                    new SelfPlayJob(nextJobId, seed + nextJobId, gamesPerJob, depth, fromEndgame)
+                            .encode());
+            nextJobId++;
+        }
+        return nextJobId;
+    }
+
+    /**
+     * Whether a batch came from endgame-seeded games, judged by what most of it looks like.
+     *
+     * <p>Not by the first position: a batch is a slice of a job's output, not the start of a game, so a
+     * later batch from an opening job can begin in a played-out ending and would be misread. Every
+     * position in an endgame-seeded batch is small, while an opening batch is mostly not, so the
+     * majority settles it and a few played-out games cannot swing it.
+     *
+     * <p>Counting pieces rather than adding a field to the message keeps the body exactly the text the
+     * dataset receives, which is the property that stops the two ends disagreeing about the format.
+     */
+    static boolean looksLikeEndgame(String body) {
+        int small = 0;
+        int lines = 0;
+        for (String line : body.split("\n")) {
+            if (line.isBlank()) {
+                continue;
+            }
+            lines++;
+            int bar = line.indexOf('|');
+            String placement = (bar < 0 ? line : line.substring(0, bar)).split(" ")[0];
+            int pieces = 0;
+            for (int i = 0; i < placement.length(); i++) {
+                if (Character.isLetter(placement.charAt(i))) {
+                    pieces++;
+                }
+            }
+            if (pieces <= 8) {
+                small++;
+            }
+        }
+        return lines > 0 && small * 2 > lines;
     }
 
     /**

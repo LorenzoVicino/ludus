@@ -102,4 +102,42 @@ class DatasetBalanceTest {
     void startsWithoutDividingByZero() {
         assertTrue(CollectorMain.wantsEndgame(0, 0, 0.35));
     }
+
+    private static final String OPENING_START =
+            "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b - - 0 1|12|1";
+    private static final String PLAYED_OUT_ENDING = "8/8/4k3/8/8/2K5/6R1/8 w - - 4 40|310|1";
+    private static final String SEEDED_ENDING = "8/8/8/1b5k/5K2/2B5/8/8 b - - 4 3|-23|1";
+
+    @Test
+    @DisplayName("a batch of seeded endgames is recognised as one")
+    void endgameBatchIsRecognised() {
+        assertTrue(CollectorMain.looksLikeEndgame(
+                String.join("\n", SEEDED_ENDING, SEEDED_ENDING, SEEDED_ENDING)));
+    }
+
+    @Test
+    @DisplayName("an opening batch is not called an endgame just because its first line is small")
+    void aPlayedOutEndingDoesNotRelabelAnOpeningBatch() {
+        // The bug this guards: a batch is a slice of a job's output, not the start of a game, so a
+        // later batch from an opening job can begin in an ending that was played into. Judging by the
+        // first line alone misreads that batch and starves the control loop of endgame jobs.
+        String batch = String.join("\n", PLAYED_OUT_ENDING, PLAYED_OUT_ENDING,
+                OPENING_START, OPENING_START, OPENING_START, OPENING_START, OPENING_START);
+        assertFalse(CollectorMain.looksLikeEndgame(batch),
+                "two played-out positions should not outvote five middlegame ones");
+    }
+
+    @Test
+    @DisplayName("an empty body is not an endgame")
+    void emptyBodyIsNotAnEndgame() {
+        assertFalse(CollectorMain.looksLikeEndgame(""));
+        assertFalse(CollectorMain.looksLikeEndgame("\n\n"));
+    }
+
+    @Test
+    @DisplayName("a single-line body still classifies")
+    void singleLineBodyClassifies() {
+        assertTrue(CollectorMain.looksLikeEndgame(SEEDED_ENDING));
+        assertFalse(CollectorMain.looksLikeEndgame(OPENING_START));
+    }
 }
