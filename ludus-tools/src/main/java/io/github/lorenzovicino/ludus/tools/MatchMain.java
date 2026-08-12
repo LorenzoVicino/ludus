@@ -4,6 +4,7 @@ import io.github.lorenzovicino.ludus.tools.dist.CoordinatorMain;
 import io.github.lorenzovicino.ludus.tools.dist.WorkerMain;
 import io.github.lorenzovicino.ludus.tools.selfplay.CollectorMain;
 import io.github.lorenzovicino.ludus.tools.selfplay.GeneratorMain;
+import io.github.lorenzovicino.ludus.tools.selfplay.RelabelMain;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
@@ -12,20 +13,24 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Entry point for the match runner, in three modes.
+ * Entry point for the development tooling: matches, training data, and measurement.
  *
  * <pre>
- * ludus-match local       everything on this machine, threads and subprocesses
- * ludus-match coordinator hands out openings over a broker and collects results
- * ludus-match worker      plays openings somebody else scheduled
+ * ludus-match local       play a match here, threads and subprocesses
+ * ludus-match coordinator hand out openings over a broker and collect results
+ * ludus-match worker      play openings somebody else scheduled
+ * ludus-match collect     write the training dataset, here or across machines
+ * ludus-match generate    play self-play games and publish labelled positions
+ * ludus-match relabel     replace labels that chess theory settles
+ * ludus-match bench       node rate, and whether a network is worth its cost
  * </pre>
  *
- * <p>{@code local} is the default and is what a single machine should use: it needs nothing running
- * and no configuration. The other two exist because one SPRT match is 300 to 500 games, and the wall
- * time of a match is what limits how quickly patches can be evaluated.
+ * <p>{@code local} is the default and is what a single machine should use for a match: it needs nothing
+ * running and no configuration. The distributed pair exists because one SPRT match is 300 to 500 games,
+ * and the wall time of a match is what limits how quickly patches can be evaluated.
  *
- * <p>All three exit the same way — 0 accepted, 1 rejected, 2 inconclusive, 3 error — so a workflow can
- * gate a patch on the result without caring which mode produced it.
+ * <p>The match modes exit the same way — 0 accepted, 1 rejected, 2 inconclusive, 3 error — so a workflow
+ * can gate a patch on the result without caring which one produced it.
  *
  * <pre>
  * java -jar ludus-match.jar local \
@@ -83,6 +88,7 @@ public final class MatchMain {
             case "coordinator" -> CoordinatorMain.run(rest);
             case "generate" -> GeneratorMain.run(rest);
             case "collect" -> CollectorMain.run(rest);
+            case "relabel" -> RelabelMain.run(rest);
             case "bench" -> BenchMain.run(rest);
             // Options straight away is the original single-mode invocation, kept working.
             default -> args[0].startsWith("--")
@@ -228,8 +234,10 @@ public final class MatchMain {
                   local        run the whole match here (default if options come first)
                   coordinator  hand out openings over a broker and collect results
                   worker       play openings a coordinator scheduled
-                  collect      schedule self-play and write the training dataset as it arrives
+                  collect      write the training dataset, here or across machines
                   generate     play self-play games and publish labelled positions
+                  relabel      replace labels that chess theory settles
+                  bench        node rate, and how well a network predicts its labels
 
                 LOCAL
                   --engine-a CMD     command that launches the candidate
@@ -265,6 +273,11 @@ public final class MatchMain {
                   --samples N        stop once this many positions are written (default 100000)
                   --games-per-job N  games per queued job (default 50)
                   --depth D          search depth per move (default 6)
+                  --endgame-fraction F  share of positions seeded from endgames (default 0.35).
+                                     Self-play between equals does not reach real endings, so they
+                                     are constructed rather than played into
+                  --local            generate here, with no broker at all
+                  --concurrency K    threads when --local (default: cores / 2)
                   --append           add to the dataset instead of replacing it
                   --broker URI, --seed S, --idle-timeout MIN
 
@@ -272,10 +285,26 @@ public final class MatchMain {
                   --concurrency K    games in parallel on this machine (default: cores / 2)
                   --broker URI, --idle-timeout S
 
+                RELABEL
+                  --in PATH          dataset to read
+                  --out PATH         dataset to write
+                  Positions where neither side can mate are drawn, so their score is zero and no
+                  search is needed. Fixes labels inherited from an evaluation that scored those
+                  positions at up to +417 centipawns.
+
+                BENCH
+                  --depth D          search depth for the node-rate benchmark (default 8)
+                  --nnue PATH        evaluate with this network instead of the hand-written one
+                  --compare          network against the hand-written evaluation, position by position
+                  --predict PATH     how well each evaluation predicts a dataset's labels, by phase
+                                     and by label magnitude. Needs --nnue
+                  --sample N         positions to sample when predicting (default 20000)
+
                 exit: 0 accepted, 1 rejected, 2 inconclusive, 3 error
 
                 Engine commands are split on whitespace, so paths must not contain spaces.
                 """);
     }
 }
+
 
