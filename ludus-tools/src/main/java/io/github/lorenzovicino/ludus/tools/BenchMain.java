@@ -154,12 +154,29 @@ public final class BenchMain {
      * those <em>should</em> disagree with the raw hand-crafted evaluation — that disagreement is the
      * knowledge it is supposed to have absorbed. Rewarding agreement would reward the defect.
      *
-     * <p>So this asks instead: given a position and what a deep search concluded about it, which
-     * evaluation is closer? The hand-crafted one is the baseline, and it is a fair one, because the
-     * labels were produced by searching with it. A network that predicts a ten-ply verdict better than
-     * the evaluation that ten-ply search used has learned something the evaluation does not contain,
-     * which is the entire premise of NNUE. A network that does not has no reason to cost seven times as
-     * much.
+     * <p>So this asks instead: given a position and what a deep search concluded about it, how close does
+     * each evaluation come?
+     *
+     * <h2>What this cannot be used for, having been used for it</h2>
+     *
+     * <p>An earlier version of this comment claimed the hand-crafted evaluation was "a fair baseline,
+     * <em>because</em> the labels were produced by searching with it". That is exactly backwards. The
+     * label is a search score anchored to the hand-crafted evaluation, so near level — where the search
+     * correction is small — the hand-crafted number predicts <strong>its own contribution to the
+     * target</strong>. It is not a competitor on this metric, it is part of it.
+     *
+     * <p>The error was not harmless: it produced the confident conclusion that a network "has nothing to
+     * offer for its cost", which the numbers here cannot establish. Measured on identical data, a
+     * trained network read 0.045 against the hand-crafted evaluation's 0.019 <em>on the network's own
+     * training set</em> — a gap that says more about which of the two the target was built from than
+     * about which plays better.
+     *
+     * <p>What the numbers are good for: <strong>comparing networks with each other</strong>, where the
+     * bias is identical on both sides, and seeing where in the board's life a network is weakest. The
+     * hand-crafted column stays as a reference point, and is labelled as one.
+     *
+     * <p>Whether a network is worth its cost is a question only a match answers. There is no cheap
+     * substitute, which is inconvenient and remains true.
      */
     private static int predict(NnueNetwork network, Path dataset, int sample) throws Exception {
         long lines;
@@ -265,9 +282,7 @@ public final class BenchMain {
         // The band table is the one to read. See LABEL_BANDS: a mean in centipawns alone would punish
         // the network for not separating two winning positions, which no engine needs to do.
         System.out.printf(Locale.ROOT, "%n%-17s %9s %9s %9s %9s %9s%n",
-                "|label|", "count", "hand cp", "net cp", "hand win%", "net win%");
-        int decisiveLosses = 0;
-        int decisiveBands = 0;
+                "|label|", "count", "ref cp", "net cp", "ref win%", "net win%");
         for (int b = 0; b < bands; b++) {
             if (countsByBand[b] == 0) {
                 continue;
@@ -278,27 +293,18 @@ public final class BenchMain {
                     label, countsByBand[b],
                     handByBand[b] / countsByBand[b], networkByBand[b] / countsByBand[b],
                     handProbability[b] / countsByBand[b], networkProbability[b] / countsByBand[b]);
-            // The near-level bands are the ones where being wrong changes the move played.
-            if (LABEL_BANDS[b] <= 400) {
-                decisiveBands++;
-                if (networkProbability[b] > handProbability[b]) {
-                    decisiveLosses++;
-                }
-            }
         }
 
-        System.out.printf("%nmean error against a ten-ply label: hand %d cp, network %d cp%n",
+        System.out.printf("%nmean error against a ten-ply label: reference %d cp, network %d cp%n",
                 hand, learned);
-        if (decisiveLosses == 0) {
-            System.out.println("the network predicts deep searches better than the evaluation they "
-                    + "used, in every band where the difference decides a move");
-        } else if (decisiveLosses < decisiveBands) {
-            System.out.printf("mixed: the network loses %d of %d near-level bands, which is where "
-                    + "being wrong changes the move played%n", decisiveLosses, decisiveBands);
-        } else {
-            System.out.println("the network is beaten by the evaluation its labels came from, in "
-                    + "every band that decides a move, so it has nothing to offer for its cost");
-        }
+        // Deliberately no verdict. The hand-crafted column is not a competitor on this metric: the
+        // labels are search scores anchored to it, so near level it is predicting its own contribution
+        // to the target. An earlier version of this printed "the network has nothing to offer for its
+        // cost" on exactly that comparison, which the numbers cannot support.
+        System.out.println("The reference column is the hand-crafted evaluation, which the labels were");
+        System.out.println("produced by searching with. It is part of the target, not a rival on it, so");
+        System.out.println("do not read these columns as a contest. Compare networks with each other");
+        System.out.println("here; compare a network against the hand-crafted evaluation with a match.");
         System.out.println("inference path: " + NnueEvaluator.inferencePath());
         // Not an exit code that gates anything: it reports, and the SPRT decides.
         return 0;

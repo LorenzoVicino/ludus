@@ -231,10 +231,14 @@ know something that function does not. That is measurable directly, and far more
 java -jar ludus-tools/target/ludus-match.jar bench --predict build/holdout.txt --nnue build/ludus.nnue
 ```
 
-Given a position and what a ten-ply search concluded about it, which evaluation is closer? The
-hand-written one is a fair baseline, because those labels were produced by searching *with* it — so a
-network that predicts them better has absorbed something the evaluation does not contain, which is the
-whole premise of NNUE.
+Given a position and what a ten-ply search concluded about it, how close does the network come?
+
+**And a warning that was learned the hard way.** The hand-written evaluation appears as a reference
+column, and it is *not* a fair opponent on this metric: the labels are search scores anchored to it, so
+near level it is predicting its own contribution to the target. It is part of the measurement, not a rival
+in it. Reading those columns as a contest produced a confident, wrong conclusion here for several hours.
+Use these numbers to compare networks with each other, where the bias is identical on both sides, and to
+see where in a game a network is weakest.
 
 Reported per phase and per label magnitude, and the second breakdown matters: training minimises error on
 `sigmoid(cp/400)`, which saturates past a few hundred centipawns, so a network is barely taught to
@@ -243,9 +247,12 @@ centipawns would punish that irrelevant distinction. **The verdict reads the ban
 sign of a difference decides which move gets played.** A metric that can be passed by being right where
 it does not matter is not a gate.
 
-This test costs a minute. An SPRT costs hours, and for the first network would only have confirmed what
-the minute already said — that it predicted deep searches *worse* than the evaluation it was meant to
-improve on, in every band that decides a move.
+The number worth reading is the absolute one. Near level the current network is off by 0.07 in win
+probability, which is about **109 centipawns** — an evaluation wrong by more than a pawn where the sign
+decides the move. That statement needs no baseline, and it is enough to explain why the network loses.
+
+Whether a network is worth its cost is a question only a match answers. There is no cheap substitute,
+which is inconvenient and remains true.
 
 Most positions are discarded, and the filtering matters more than the volume: nothing while in check,
 nothing where the best move is a capture, no mate scores, and none of the random opening plies. A

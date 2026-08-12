@@ -1152,10 +1152,16 @@ narrowly, because **agreement with the hand-crafted evaluation is the wrong axis
 from deep searches. A network trained on ten-ply verdicts *should* disagree with the raw evaluation:
 that disagreement is the knowledge it is supposed to hold. Scoring it on agreement rewards the defect.
 
-`bench --predict` asks the question the right way round. Given a position and what a deep search
-concluded about it, which evaluation is closer? The hand-crafted one is a fair baseline precisely
-because the labels were produced by searching with it, so a network that predicts those verdicts better
-has absorbed something the evaluation does not contain — which is the entire premise of NNUE.
+`bench --predict` asks instead: given a position and what a deep search concluded about it, how close
+does each evaluation come?
+
+> **⚠ The paragraph that stood here was wrong, and §9.08 retires the conclusion it supported.** It
+> claimed the hand-crafted evaluation was a fair baseline *because* the labels were produced by
+> searching with it. That is backwards. A label is a search score anchored to the hand-crafted
+> evaluation, so near level — where the search correction is small — the hand-crafted number predicts
+> **its own contribution to the target.** It is part of the metric, not a competitor on it. The error is
+> kept here rather than edited out because the conclusion it produced was confident, quoted onwards, and
+> survived for hours.
 
 The first network, against depth-10 labels on 8,211 sampled positions:
 
@@ -1168,9 +1174,9 @@ The first network, against depth-10 labels on 8,211 sampled positions:
 | Opening | 1,430 | 31 | 127 |
 | **All** | **8,211** | **81** | **143** |
 
-Mean absolute error in centipawns. **It is worse than the hand-crafted evaluation in every phase**, 143
-against 81. That is a far sharper statement than "a lossy copy with no upside", and it explains −541 Elo
-without appealing to speed at all.
+Mean absolute error in centipawns: 143 against 81, worse in every phase. **Read as a contest this is
+meaningless** (see the warning above); read as an absolute statement about the network it is not — 143
+centipawns of error is bad on its own terms, whatever it is compared with.
 
 #### Why a mean in centipawns is not enough
 
@@ -1191,16 +1197,20 @@ minimises — the two cases separate:
 | 400–1000 | 1,526 | 113 | 160 | 0.046 | 0.059 |
 | 1000–2000 | 480 | 487 | **364** | 0.089 | **0.052** |
 
-The concern was legitimate and the answer is decisive: **2.7 to 3.8 times worse in win-probability terms
-in every band near level**, which is where the sign of a difference decides which move gets played. The
-defect is real, not an artefact of the metric.
+The concern was legitimate, and the useful part of the answer is the **absolute** figure: near level the
+network is off by **0.07 in win probability**, which at the derivative of `sigmoid(cp/400)` around zero
+is about **109 centipawns**. An evaluation wrong by more than a pawn in the band that decides which move
+gets played will lose games, and no comparison is needed to say so.
 
-And it wins exactly one band — 1000–2000, where the hand-crafted evaluation is off by 487 centipawns and
-the network by 364. It learned to recognise thoroughly winning positions, which no engine needs help
-with, and failed at everything that decides a move.
+The *ratios* against the hand-crafted column — 2.7 to 3.8 times worse — are not a finding, for the reason
+in the warning above.
 
-The verdict therefore reads the near-level bands, not the overall mean. **A metric that can be passed by
-being right where it does not matter is not a gate.**
+One band goes the other way: 1000–2000, where the reference is off by 487 centipawns and the network by
+364. Being better at recognising thoroughly winning positions is worth nothing, since both readings
+produce the same move.
+
+**A metric that can be passed by being right where it does not matter is not a gate** — which was the
+right instinct, applied to a metric that turned out not to be a gate at all.
 
 **It also corrects where §9.05 aimed.** Endgames do carry the largest absolute error, but the worst
 *proportional* gap is in the opening — 31 against 127, a factor of four and a half. The network is not
@@ -1216,8 +1226,63 @@ the one-at-a-time rule of §5.5. Accepted here deliberately: that rule governs p
 where attribution is the whole difficulty, and this test is cheap enough to re-run with either half
 removed if the result needs attributing.
 
-**This check now runs before the SPRT**, in `tools/retrain.ps1`. It costs a minute. The SPRT costs hours
-and, for the first network, would only have confirmed what the minute already said.
+**This check runs before the SPRT**, in `tools/retrain.ps1`, and it costs a minute. It is a way to compare
+networks with each other and to see where in a game a network is weakest. It is **not** a substitute for a
+match, and §9.08 is what happens when it is treated as one.
+
+### 9.08 Everything above was applied, and the engine plays exactly as badly
+
+Second act, second attempt. Every fix the sections above argued for, applied together:
+
+| Change | Was | Became |
+|---|---|---|
+| Teacher depth | 6 | **10** |
+| Endgame coverage | ~none | **35% seeded, 43% of positions small** |
+| Training length | 8 epochs, flat rate | **120 epochs, cosine, best checkpoint kept** |
+| Positions | 252,000 | **642,426** |
+| Labels for drawn material | up to +417 cp | **0, exactly** |
+| Validation loss | still falling at the end | **0.00288, converged at epoch 105 of 120** |
+
+**Result: −528.9 ± 236.8 Elo, H0 accepted after 22 games.** One win, twenty-one losses. The previous
+network measured −541. Within the error bars, *nothing changed at all.*
+
+That is the most useful result in this document, and it is worth being blunt about why. Four hypotheses
+were formed, argued for at length, implemented carefully, and tested. Speed was measured and retired.
+Endgame coverage was built and made no difference. Undertraining was real — validation loss fell by a
+factor of 2.5 — and made no difference. The label-blend weight produced a clean monotonic curve on a
+metric that turned out to be circular.
+
+What the numbers say once the circular comparison is dropped and only absolutes are read: near level the
+network's error is **0.07 in win probability, about 109 centipawns.** An evaluation wrong by more than a
+pawn where the sign decides the move loses games. It does not need a hidden bug, a slow inference path or
+a poisoned label to explain −529 Elo. It is simply not accurate, and it was not accurate before either.
+
+Two candidates left, and they are the two that were named first and deferred longest:
+
+1. **Volume.** 642,426 positions against the tens of millions working networks are trained on. §9.05
+   named this and put it "second in line". It has been second in line all day.
+2. **Capacity or target.** 768→256×2→32→32→1 with an MSE on blended win probability.
+
+`tools/learning-curve.ps1` separates them: train at 80k, 200k, 400k and 642k positions, measure the
+float model on the holdout, and read the near-level bands down the sizes. Still falling at the largest
+means volume is the constraint and the slope says roughly how much more is needed. Flat means it is not,
+and generating more would be wasted effort.
+
+A curve is a cheap measurement that answers a question four expensive ones did not. The lesson is not
+"the hypotheses were unreasonable" — each followed from a real observation. It is that **the constraint
+named in the very first analysis was never tested**, because testing it looked boring and testing the
+others looked interesting.
+
+**A separate defect, found and not the cause.** `PyTorchAgreementTest` fails on the long-trained network:
+the quantised file disagrees with the float model by up to **104 centipawns**, where the previous network
+managed 4. The exporter derives one `QB` scale for every dense layer from the global peak weight, so
+`layer_two`'s peak of 2.01 sets the resolution for `layer_one`, whose median weight is 0.032 — one unit in
+127. Longer training grew the peaks and the scale coarsened.
+
+That is a real bug and it is filed, but it is **not** what loses the games: the float model measured
+0.068 near level against the quantised 0.070. It contributes 0.002. Recording it as a separate finding
+rather than folding it into the diagnosis, because the temptation to explain one failure with every
+available defect is how a wrong diagnosis survives.
 
 ### 9.1 M6 — the status page
 
