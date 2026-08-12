@@ -44,8 +44,8 @@ public final class NnueEvaluator implements Evaluator {
         clip(accumulator.perspective(us), 0);
         clip(accumulator.perspective(Pieces.flip(us)), NnueNetwork.HIDDEN);
 
-        propagate(activations, NnueNetwork.L1_INPUTS, network.l1WeightsWide, network.l1Biases, layerOne);
-        propagate(layerOne, NnueNetwork.L1, network.l2WeightsWide, network.l2Biases, layerTwo);
+        propagate(activations, NnueNetwork.L1_INPUTS, network.l1WeightsWide, network.l1Biases, network.qb1(), layerOne);
+        propagate(layerOne, NnueNetwork.L1, network.l2WeightsWide, network.l2Biases, network.qb2(), layerTwo);
 
         int output = network.outputBias
                 + DOT.of(layerTwo, network.outputWeightsWide, 0, NnueNetwork.L2);
@@ -53,7 +53,7 @@ public final class NnueEvaluator implements Evaluator {
         // Back out of the fixed-point units the layers accumulate in, and into centipawns. In long,
         // because the product of a wide activation scale and 400 leaves an int with no headroom.
         long scaled = (long) output * NnueNetwork.SCALE;
-        long divisor = (long) network.qa() * network.qb();
+        long divisor = (long) network.qa() * network.qb3();
         return (int) Math.floorDiv(scaled + divisor / 2, divisor);
     }
 
@@ -69,10 +69,22 @@ public final class NnueEvaluator implements Evaluator {
         }
     }
 
-    private void propagate(int[] input, int inputSize, int[] weights, int[] biases, int[] output) {
+    /**
+     * One dense layer, divided back out by <em>its own</em> weight scale.
+     *
+     * <p>A single scale for all three layers had to serve the largest weight in any of them, and they do
+     * not resemble each other: the second layer peaks at 2.01 while the first layer's median weight is
+     * 0.032 — the peak set the resolution and the median paid for it. Per-layer scales cost eight bytes
+     * in the header and took the fixtures outside tolerance from nine of ten to four.
+     *
+     * <p>The worst single gap did not move, 58 centipawns to 59, and it is the start position — the
+     * fullest board there is. That one is the feature accumulator's rounding, not this, and it is still
+     * open.
+     */
+    private void propagate(int[] input, int inputSize, int[] weights, int[] biases, int scale, int[] output) {
         for (int neuron = 0; neuron < output.length; neuron++) {
             int sum = biases[neuron] + DOT.of(input, weights, neuron * inputSize, inputSize);
-            output[neuron] = clippedRelu(divideRounding(sum, network.qb()), network.qa());
+            output[neuron] = clippedRelu(divideRounding(sum, scale), network.qa());
         }
     }
 

@@ -63,7 +63,7 @@ public final class NnueNetwork {
     public static final int SCALE = 400;
 
     private static final int MAGIC = 0x4C55_444E; // "LUDN"
-    private static final int FORMAT_VERSION = 2;
+    private static final int FORMAT_VERSION = 3;
 
     /**
      * The quantisation scales, read from the file rather than fixed here.
@@ -80,14 +80,24 @@ public final class NnueNetwork {
      * them alongside. The engine reads what it is given.
      */
     private final int qa;
-    private final int qb;
+    private final int qb1;
+    private final int qb2;
+    private final int qb3;
 
     public int qa() {
         return qa;
     }
 
-    public int qb() {
-        return qb;
+    public int qb1() {
+        return qb1;
+    }
+
+    public int qb2() {
+        return qb2;
+    }
+
+    public int qb3() {
+        return qb3;
     }
 
     final short[] featureWeights;  // [INPUTS * HIDDEN], column-major by feature
@@ -112,14 +122,16 @@ public final class NnueNetwork {
     final int[] l2WeightsWide;
     final int[] outputWeightsWide;
 
-    NnueNetwork(int qa, int qb,
+    NnueNetwork(int qa, int qb1, int qb2, int qb3,
                 short[] featureWeights, short[] featureBiases, byte[] l1Weights, int[] l1Biases,
                 byte[] l2Weights, int[] l2Biases, byte[] outputWeights, int outputBias) {
-        if (qa <= 0 || qb <= 0) {
-            throw new IllegalArgumentException("Quantisation scales must be positive: " + qa + ", " + qb);
+        if (qa <= 0 || qb1 <= 0 || qb2 <= 0 || qb3 <= 0) {
+            throw new IllegalArgumentException("Quantisation scales must be positive: " + qa + ", " + qb1 + ", " + qb2 + ", " + qb3);
         }
         this.qa = qa;
-        this.qb = qb;
+        this.qb1 = qb1;
+        this.qb2 = qb2;
+        this.qb3 = qb3;
         this.featureWeights = featureWeights;
         this.featureBiases = featureBiases;
         this.l1Weights = l1Weights;
@@ -178,7 +190,9 @@ public final class NnueNetwork {
         expect(in.readInt(), L1, "first layer size");
         expect(in.readInt(), L2, "second layer size");
         int qa = in.readInt();
-        int qb = in.readInt();
+        int qb1 = in.readInt();
+        int qb2 = in.readInt();
+        int qb3 = in.readInt();
 
         short[] featureWeights = readShorts(in, INPUTS * HIDDEN);
         short[] featureBiases = readShorts(in, HIDDEN);
@@ -189,7 +203,7 @@ public final class NnueNetwork {
         byte[] outputWeights = readBytes(in, L2);
         int outputBias = in.readInt();
 
-        return new NnueNetwork(qa, qb, featureWeights, featureBiases, l1Weights, l1Biases,
+        return new NnueNetwork(qa, qb1, qb2, qb3, featureWeights, featureBiases, l1Weights, l1Biases,
                 l2Weights, l2Biases, outputWeights, outputBias);
     }
 
@@ -202,7 +216,9 @@ public final class NnueNetwork {
         out.writeInt(L1);
         out.writeInt(L2);
         out.writeInt(qa);
-        out.writeInt(qb);
+        out.writeInt(qb1);
+        out.writeInt(qb2);
+        out.writeInt(qb3);
 
         for (short value : featureWeights) {
             out.writeShort(value);
@@ -250,7 +266,7 @@ public final class NnueNetwork {
         int[] l2Biases = randomInts(random, L2);
         byte[] outputWeights = randomBytes(random, L2);
 
-        return new NnueNetwork(1024, 256, featureWeights, featureBiases, l1Weights, l1Biases,
+        return new NnueNetwork(1024, 256, 256, 256, featureWeights, featureBiases, l1Weights, l1Biases,
                 l2Weights, l2Biases, outputWeights, random.nextInt(2001) - 1000);
     }
 

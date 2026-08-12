@@ -20,7 +20,7 @@ from features import HIDDEN, INPUTS, L1, L2, SCALE, active_features
 from model import Nnue
 
 MAGIC = 0x4C55_444E  # "LUDN"
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 
 # The accumulator is int16 and holds the biases plus one column per piece on the board, so the scale
 # has to leave room for a full board. Thirty-three is thirty-two pieces and a margin.
@@ -31,44 +31,58 @@ INT8_LIMIT = 127
 MAX_QA = 2048
 
 
-def previous_power_of_two(value: int) -> int:
-    power = 1
-    while power * 2 <= value:
-        power *= 2
-    return max(1, power)
-
-
 def choose_scales(model: Nnue) -> tuple[int, int]:
     """Picks the largest scales that saturate nothing.
 
-    Fixed scales were the previous version's mistake and it was invisible: a trained feature weight
+    Fixed scales were the first version's mistake and it was invisible: a trained feature weight
     averaging 0.039 became the integer 5 at a scale of 127, and a first-layer weight of 0.037 became
     the integer 2 at a scale of 64. The exported network was a coarse caricature of the trained one,
     off by up to 29 centipawns, and nothing raised so much as a warning.
 
-    Measuring instead removes the whole class of problem, and keeps removing it every time the weight
+    Measuring instead removes that class of problem, and keeps removing it every time the weight
     distribution shifts under retraining.
+
+    **Rounding those measured scales down to a power of two was the second version's mistake**, and it
+    threw away up to half the resolution for nothing: a dense peak of 2.01 permits a scale of 63, and
+    the rounding made it 32. Powers of two would earn their keep if the engine shifted, and it does
+    not — ``NnueEvaluator`` calls ``divideRounding(sum, qb)``, an honest division. The constraint was
+    protecting an optimisation nobody had written.
     """
     feature_max = max(
         float(model.feature_transformer.weight.detach().abs().max()),
         float(model.feature_bias.detach().abs().max()),
     )
-    dense_max = max(
-        float(model.layer_one.weight.detach().abs().max()),
-        float(model.layer_two.weight.detach().abs().max()),
-        float(model.output.weight.detach().abs().max()),
-    )
-
-    qa = previous_power_of_two(min(MAX_QA, int(INT16_LIMIT / (MAX_ACTIVE_FEATURES * feature_max))))
-    qb = previous_power_of_two(int(INT8_LIMIT / dense_max))
-
+    qa = max(1, min(MAX_QA, int(INT16_LIMIT / (MAX_ACTIVE_FEATURES * feature_max))))
     print(f"feature weights peak at {feature_max:.4f} -> QA {qa} "
           f"(a typical weight becomes "
           f"{round(float(model.feature_transformer.weight.detach().abs().mean()) * qa)})")
-    print(f"dense weights peak at {dense_max:.4f} -> QB {qb} "
-          f"(a typical first-layer weight becomes "
-          f"{round(float(model.layer_one.weight.detach().abs().mean()) * qb)})")
-    return qa, qb
+
+    # A scale per dense layer, because one shared scale has to serve the largest weight in any layer
+    # that shares it and these layers do not resemble each other: layer_two peaks at 2.01 while
+    # layer_one's median weight is 0.032. The peak set the resolution and the median paid for it.
+    #
+    # Measured on ten fixtures: fixtures outside the 12-centipawn tolerance went from 9 to 4, and the
+    # mean gap from 37.8 to 33.0. The *worst* gap did not move, 58 to 59 — and that nearly cost the
+    # change, because the worst gap was the one statistic I compared first. A single summary number
+    # decided nothing here; the count did.
+    #
+    # What the unchanged worst case says about where the rest of the error lives: it is the start
+    # position, the fullest board there is, and the gaps shrink as pieces come off. That points at the
+    # feature accumulator, where thirty-two rounded weights are summed, rather than at the dense layers,
+    # where the count is fixed. The fix for that one is to clamp feature weights during training so a
+    # larger QA fits in int16: QA is capped at 32767 / (34 * peak), so a peak of 0.77 permits 1258 while
+    # a peak of 0.25 would permit 3855. It needs a training change and a retrain, and is not done.
+    scales = []
+    for name, layer in (("layer_one", model.layer_one),
+                        ("layer_two", model.layer_two),
+                        ("output", model.output)):
+        weights = layer.weight.detach().abs()
+        peak = float(weights.max())
+        scale = max(1, int(INT8_LIMIT / peak))
+        scales.append(scale)
+        print(f"{name:12s} peaks at {peak:.4f} -> {scale:4d} "
+              f"(a typical weight becomes {round(float(weights.mean()) * scale)})")
+    return (qa, *scales)
 
 # A handful of positions with nothing in common, so a mistake that only shows up with, say, a rook on
 # the seventh rank has somewhere to show up.
@@ -105,11 +119,11 @@ def main() -> int:
     model.eval()
 
     overflows: list[str] = []
-    qa, qb = choose_scales(model)
+    qa, qb1, qb2, qb3 = choose_scales(model)
 
     with open(arguments.out, "wb") as handle:
-        handle.write(struct.pack(">iiiiiiii",
-                                 MAGIC, FORMAT_VERSION, INPUTS, HIDDEN, L1, L2, qa, qb))
+        handle.write(struct.pack(">iiiiiiiiii", MAGIC, FORMAT_VERSION,
+                                 INPUTS, HIDDEN, L1, L2, qa, qb1, qb2, qb3))
 
         # Feature transformer: weights and the accumulator live in activation units.
         weights = model.feature_transformer.weight.detach()
@@ -124,15 +138,15 @@ def main() -> int:
             handle.write(struct.pack(">h", clamp(round(float(bias[hidden]) * qa), -32768, 32767,
                                                  "feature bias", overflows)))
 
-        write_dense(handle, model.layer_one, HIDDEN * 2, L1, qa, qb, overflows)
-        write_dense(handle, model.layer_two, L1, L2, qa, qb, overflows)
+        write_dense(handle, model.layer_one, HIDDEN * 2, L1, qa, qb1, overflows)
+        write_dense(handle, model.layer_two, L1, L2, qa, qb2, overflows)
 
         # The output layer has one neuron, so its weights are written flat and its bias alone.
         output_weights = model.output.weight.detach()[0]
         for i in range(L2):
-            handle.write(struct.pack(">b", clamp(round(float(output_weights[i]) * qb), -128, 127,
+            handle.write(struct.pack(">b", clamp(round(float(output_weights[i]) * qb3), -128, 127,
                                                  "output weight", overflows)))
-        handle.write(struct.pack(">i", round(float(model.output.bias.detach()[0]) * qa * qb)))
+        handle.write(struct.pack(">i", round(float(model.output.bias.detach()[0]) * qa * qb3)))
 
     print(f"wrote {arguments.out}")
     if overflows:
