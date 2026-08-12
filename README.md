@@ -155,19 +155,29 @@ graph LR
   end
 
   subgraph s["generating training data"]
-    K["collector"] -- "batches of games" --> SJ[("ludus.selfplay.jobs")]
+    K["collector"] -- "openings or endgames,<br/>whichever is behind" --> SJ[("ludus.selfplay.jobs")]
     SJ --> G1["generator"]
     SJ --> G2["generator"]
     G1 -- "labelled positions" --> SS[("ludus.selfplay.samples")]
     G2 --> SS
     SS -- "written as they arrive" --> D["dataset"]
-    SS --> K
+    SS -- "counts what arrived" --> K
   end
 ```
 
 Both halves are the same shape — a queue of work and a queue of results — which is why the broker
 plumbing is one class rather than two. Nothing is acknowledged until the work is finished and its
 output is published, so a machine that dies hands its job back instead of losing it.
+
+**The arrow back into the collector is the one that earns the queue.** Jobs are not published up front;
+the queue is held at a shallow window and refilled with whichever kind of position the dataset is short
+of. Pre-publishing a whole run fixes its composition in advance and gets it wrong, because an endgame
+searches about ten times faster than a middlegame and a fixed proportion of *jobs* is not a fixed
+proportion of *positions*. The first attempt asked for 35% endgames and produced 91%. A plain loop
+cannot steer work it has already handed out.
+
+None of this is required to build a dataset on one machine — `collect --local` does that with no broker
+at all. The queue is for spreading generation across machines, or running it beside training.
 
 ```bash
 docker compose up -d                       # the broker
@@ -199,6 +209,43 @@ java -jar ludus-tools/target/ludus-match.jar collect --samples 2000000 --out tra
 
 java -jar ludus-tools/target/ludus-match.jar generate --concurrency 6   # on each machine
 ```
+
+On one machine, with no broker involved:
+
+```bash
+java -jar ludus-tools/target/ludus-match.jar collect --local \
+    --samples 700000 --depth 10 --endgame-fraction 0.35 --concurrency 22 \
+    --out build/selfplay-d10.txt
+```
+
+Endgames are **constructed rather than played into**: self-play between two copies of one engine ends in
+the middlegame or by the fifty-move rule, so a dataset built only from openings is thin exactly where a
+tapered evaluation behaves least like its middlegame self.
+
+### Is a trained network worth its cost?
+
+A network is seven times slower to evaluate than the hand-written function it replaces, so it has to
+know something that function does not. That is measurable directly, and far more cheaply than a match:
+
+```bash
+java -jar ludus-tools/target/ludus-match.jar bench --predict build/holdout.txt --nnue build/ludus.nnue
+```
+
+Given a position and what a ten-ply search concluded about it, which evaluation is closer? The
+hand-written one is a fair baseline, because those labels were produced by searching *with* it — so a
+network that predicts them better has absorbed something the evaluation does not contain, which is the
+whole premise of NNUE.
+
+Reported per phase and per label magnitude, and the second breakdown matters: training minimises error on
+`sigmoid(cp/400)`, which saturates past a few hundred centipawns, so a network is barely taught to
+separate +500 from +900 — correctly, since both are winning and the move played is the same. A mean in
+centipawns would punish that irrelevant distinction. **The verdict reads the bands near level, where the
+sign of a difference decides which move gets played.** A metric that can be passed by being right where
+it does not matter is not a gate.
+
+This test costs a minute. An SPRT costs hours, and for the first network would only have confirmed what
+the minute already said — that it predicted deep searches *worse* than the evaluation it was meant to
+improve on, in every band that decides a move.
 
 Most positions are discarded, and the filtering matters more than the volume: nothing while in check,
 nothing where the best move is a capture, no mate scores, and none of the random opening plies. A
