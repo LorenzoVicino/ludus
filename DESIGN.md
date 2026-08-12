@@ -1197,13 +1197,19 @@ minimises — the two cases separate:
 | 400–1000 | 1,526 | 113 | 160 | 0.046 | 0.059 |
 | 1000–2000 | 480 | 487 | **364** | 0.089 | **0.052** |
 
-The concern was legitimate, and the useful part of the answer is the **absolute** figure: near level the
-network is off by **0.07 in win probability**, which at the derivative of `sigmoid(cp/400)` around zero
-is about **109 centipawns**. An evaluation wrong by more than a pawn in the band that decides which move
-gets played will lose games, and no comparison is needed to say so.
+The concern was legitimate, and the useful part of the answer looked like the **absolute** figure: near
+level the network is off by 0.07 in win probability, about 109 centipawns.
 
-The *ratios* against the hand-crafted column — 2.7 to 3.8 times worse — are not a finding, for the reason
-in the warning above.
+> **⚠ That reading was inflated too, and §9.09 has the correction.** The 0.07 is measured against labels
+> that are themselves noisy: with `lambda = 0.7`, 30% of the target is the game's outcome, which near
+> level is close to a coin toss. No model can predict a coin toss, so a large part of that 0.07 is
+> **irreducible label noise rather than error in the network.** Predicted floor from the blend alone:
+> 0.3 × 0.35 ≈ 0.084. Measured: 0.069–0.086. The same network measured against a deterministic target
+> reads **0.028–0.040, about 45 to 64 centipawns.** Still a lot. Not "more than a pawn", which is what
+> this paragraph claimed and what was repeated onwards.
+
+The *ratios* against the hand-crafted column — 2.7 to 3.8 times worse — are not a finding either, for the
+reason in the warning further up.
 
 One band goes the other way: 1000–2000, where the reference is off by 487 centipawns and the network by
 364. Being better at recognising thoroughly winning positions is worth nothing, since both readings
@@ -1253,9 +1259,10 @@ factor of 2.5 — and made no difference. The label-blend weight produced a clea
 metric that turned out to be circular.
 
 What the numbers say once the circular comparison is dropped and only absolutes are read: near level the
-network's error is **0.07 in win probability, about 109 centipawns.** An evaluation wrong by more than a
-pawn where the sign decides the move loses games. It does not need a hidden bug, a slow inference path or
-a poisoned label to explain −529 Elo. It is simply not accurate, and it was not accurate before either.
+network's error is **0.028–0.040 in win probability, about 45 to 64 centipawns.** (An earlier version of
+this paragraph said 109, measured through the label noise §9.09 describes.) Being wrong by half a pawn
+where the sign decides the move loses games. It does not need a hidden bug, a slow inference path or a
+poisoned label to explain −529 Elo. It is simply not accurate enough, and it was not before either.
 
 Two candidates left, and they are the two that were named first and deferred longest:
 
@@ -1283,6 +1290,57 @@ That is a real bug and it is filed, but it is **not** what loses the games: the 
 0.068 near level against the quantised 0.070. It contributes 0.002. Recording it as a separate finding
 rather than folding it into the diagnosis, because the temptation to explain one failure with every
 available defect is how a wrong diagnosis survives.
+
+### 9.09 The metric had a floor, and under it the answer was there all along
+
+The learning curve of §9.08 came back **flat**: eight times the data, no improvement, which reads as
+"volume is not the constraint" and would have retired the fifth hypothesis too.
+
+| Positions | 0–50 | 50–150 | 150–400 |
+|---:|---:|---:|---:|
+| 80,000 | 0.073 | 0.077 | 0.075 |
+| 200,000 | 0.077 | 0.082 | 0.076 |
+| 400,000 | 0.075 | 0.086 | 0.079 |
+| 642,000 | 0.066 | 0.082 | 0.080 |
+
+One thing did not fit. A feature transformer holds 196,608 parameters; trained on 80,000 samples it
+should **overfit badly** and do visibly worse on unseen positions. It did not. A model that behaves
+identically from 80k to 642k is not limited by data and not limited by capacity — which leaves the
+target.
+
+**The target contains a coin toss.** With `lambda = 0.7`, 30% of each label is the game's outcome, and
+near level that outcome is close to random: the same position occurs won, drawn and lost. No model
+predicts a coin toss, so the metric has a floor no amount of data or capacity can go below. Estimated
+in advance from the blend alone — 0.3 × std(outcome) ≈ 0.3 × 0.35 ≈ **0.084** — against 0.066–0.086
+measured. The floor *was* the measurement.
+
+Re-run against a deterministic target, the same four sizes:
+
+| Positions | 0–50 | 50–150 | 150–400 | 400–1000 |
+|---:|---:|---:|---:|---:|
+| 80,000 | 0.045 | 0.038 | 0.045 | 0.047 |
+| 200,000 | 0.045 | 0.037 | 0.041 | 0.042 |
+| 400,000 | 0.038 | 0.037 | 0.041 | 0.043 |
+| **642,000** | **0.029** | 0.034 | 0.041 | 0.043 |
+
+**The 0–50 band falls by 36% and is still falling at the largest size**, steepest at the end. The wider
+bands flatten. So data volume is a live constraint, and it binds specifically in the band where the sign
+of a difference decides which move gets played — which is the useful place for it to bind.
+
+A power law through those four points gives an exponent near 0.21: eight times the data for a factor of
+1.55. Halving the near-level error from 0.029 would take roughly **27× more data, on the order of 17
+million positions** — about eighteen hours of generation on one machine at the measured rate, which is
+what the distributed queue in §1.2.1 was built for. Four noisy points and one band, so that is an order
+of magnitude and not a forecast.
+
+**The lesson is not that the curve was wrong.** It was measured correctly and read correctly. The lesson
+is that **a metric can have a floor set by its own labels, and a flat line then says nothing about the
+thing you are varying.** Two identical experiments, one with a noisy target and one without, gave
+opposite conclusions about whether data matters. The contrast between them is the only reason either is
+readable.
+
+It also retires the confident absolute figure in §9.08: 109 centipawns of network error was 45–64
+centipawns of network error plus label noise, and the noise was the larger half.
 
 ### 9.1 M6 — the status page
 
