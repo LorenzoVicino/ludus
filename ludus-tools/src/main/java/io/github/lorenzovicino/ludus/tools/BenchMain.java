@@ -8,9 +8,12 @@ import io.github.lorenzovicino.ludus.nnue.NnueNetwork;
 import io.github.lorenzovicino.ludus.search.Search;
 import io.github.lorenzovicino.ludus.search.SearchLimits;
 import io.github.lorenzovicino.ludus.search.SearchResult;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Stream;
 
 /**
  * Searches a fixed position set to a fixed depth and reports how fast it went.
@@ -48,14 +51,25 @@ public final class BenchMain {
         int depth = 8;
         Path network = null;
         boolean compare = false;
+        Path predictFrom = null;
+        int sample = 20_000;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
                 case "--depth" -> depth = Integer.parseInt(value(args, ++i, "--depth"));
                 case "--nnue" -> network = Path.of(value(args, ++i, "--nnue"));
                 case "--compare" -> compare = true;
+                case "--predict" -> predictFrom = Path.of(value(args, ++i, "--predict"));
+                case "--sample" -> sample = Integer.parseInt(value(args, ++i, "--sample"));
                 default -> throw new IllegalArgumentException("unknown option " + args[i]);
             }
+        }
+
+        if (predictFrom != null) {
+            if (network == null) {
+                throw new IllegalArgumentException("--predict needs --nnue");
+            }
+            return predict(NnueNetwork.load(network), predictFrom, sample);
         }
 
         if (compare) {
@@ -101,6 +115,150 @@ public final class BenchMain {
      * learned to imitate rather than to judge, and the fix is a better teacher rather than more data
      * from the same one.
      */
+    /** Phase boundaries by piece count, kings included. */
+    private static final int[] PHASE_LIMITS = {6, 10, 16, 24, 32};
+    private static final String[] PHASE_NAMES =
+            {"bare endgame", "endgame", "late middlegame", "middlegame", "opening"};
+
+    /** Labels this far from level are mate scores or blunders, and would swamp a mean. */
+    private static final int LABEL_LIMIT = 2_000;
+
+    /**
+     * How well each evaluation predicts the labels, by phase.
+     *
+     * <pre>
+     * java -jar ludus-match.jar bench --predict build/selfplay-d10.txt --nnue build/ludus.nnue
+     * </pre>
+     *
+     * <p><strong>This measures something different from {@code --compare}, and the difference is the
+     * point.</strong> {@code --compare} reports how far the network sits from the hand-crafted
+     * evaluation, which was the right question while the network was a lossy copy of it: agreement in
+     * the middlegame meant no upside, and disagreement in endgames meant active error.
+     *
+     * <p>It is the wrong question now. The labels come from ten-ply searches, and a network trained on
+     * those <em>should</em> disagree with the raw hand-crafted evaluation — that disagreement is the
+     * knowledge it is supposed to have absorbed. Rewarding agreement would reward the defect.
+     *
+     * <p>So this asks instead: given a position and what a deep search concluded about it, which
+     * evaluation is closer? The hand-crafted one is the baseline, and it is a fair one, because the
+     * labels were produced by searching with it. A network that predicts a ten-ply verdict better than
+     * the evaluation that ten-ply search used has learned something the evaluation does not contain,
+     * which is the entire premise of NNUE. A network that does not has no reason to cost seven times as
+     * much.
+     */
+    private static int predict(NnueNetwork network, Path dataset, int sample) throws Exception {
+        long lines;
+        try (Stream<String> counting = Files.lines(dataset)) {
+            lines = counting.count();
+        }
+        int stride = (int) Math.max(1, lines / Math.max(1, sample));
+
+        HandCraftedEvaluator handCrafted = new HandCraftedEvaluator();
+        NnueEvaluator networkEvaluator = new NnueEvaluator(network);
+
+        int buckets = PHASE_LIMITS.length;
+        long[] handError = new long[buckets];
+        long[] networkError = new long[buckets];
+        long[] handWorst = new long[buckets];
+        long[] networkWorst = new long[buckets];
+        int[] counts = new int[buckets];
+        int skipped = 0;
+
+        try (Stream<String> stream = Files.lines(dataset)) {
+            Iterator<String> iterator = stream.iterator();
+            long index = -1;
+            while (iterator.hasNext()) {
+                String line = iterator.next();
+                index++;
+                if (index % stride != 0 || line.isBlank()) {
+                    continue;
+                }
+
+                int firstBar = line.indexOf('|');
+                int secondBar = line.indexOf('|', firstBar + 1);
+                if (firstBar < 0 || secondBar < 0) {
+                    continue;
+                }
+                int label = Integer.parseInt(line.substring(firstBar + 1, secondBar));
+                if (Math.abs(label) > LABEL_LIMIT) {
+                    skipped++;
+                    continue;
+                }
+
+                Board board = Board.fromFen(line.substring(0, firstBar));
+                networkEvaluator.reset(board);
+
+                long handOff = Math.abs(handCrafted.evaluate(board) - label);
+                long networkOff = Math.abs(networkEvaluator.evaluate(board) - label);
+
+                int bucket = bucketFor(board);
+                counts[bucket]++;
+                handError[bucket] += handOff;
+                networkError[bucket] += networkOff;
+                handWorst[bucket] = Math.max(handWorst[bucket], handOff);
+                networkWorst[bucket] = Math.max(networkWorst[bucket], networkOff);
+            }
+        }
+
+        System.out.printf("%,d positions in the file, every %,dth sampled, %,d beyond +/-%d skipped%n%n",
+                lines, stride, skipped, LABEL_LIMIT);
+        System.out.printf(Locale.ROOT, "%-17s %9s %9s %9s %9s %9s%n",
+                "phase", "count", "hand", "network", "worst h", "worst n");
+
+        long totalHand = 0;
+        long totalNetwork = 0;
+        int total = 0;
+        for (int b = 0; b < buckets; b++) {
+            if (counts[b] == 0) {
+                continue;
+            }
+            System.out.printf(Locale.ROOT, "%-17s %9d %9d %9d %9d %9d%n",
+                    PHASE_NAMES[b], counts[b], handError[b] / counts[b], networkError[b] / counts[b],
+                    handWorst[b], networkWorst[b]);
+            totalHand += handError[b];
+            totalNetwork += networkError[b];
+            total += counts[b];
+        }
+
+        if (total == 0) {
+            System.out.println("no usable positions");
+            return 2;
+        }
+
+        long hand = totalHand / total;
+        long learned = totalNetwork / total;
+        System.out.printf(Locale.ROOT, "%n%-17s %9d %9d %9d%n", "all", total, hand, learned);
+        System.out.printf("%nmean error against a ten-ply label: hand %d cp, network %d cp%n",
+                hand, learned);
+        System.out.println(learned < hand
+                ? "the network predicts deep searches better than the evaluation they used"
+                : "the network is no better than the evaluation its labels came from, so it has "
+                        + "nothing to offer for its cost");
+        System.out.println("inference path: " + NnueEvaluator.inferencePath());
+        // Not an exit code that gates anything: it reports, and the SPRT decides.
+        return 0;
+    }
+
+    private static int bucketFor(Board board) {
+        String placement = board.toFen();
+        int pieces = 0;
+        for (int i = 0; i < placement.length(); i++) {
+            char c = placement.charAt(i);
+            if (c == ' ') {
+                break;
+            }
+            if (Character.isLetter(c)) {
+                pieces++;
+            }
+        }
+        for (int b = 0; b < PHASE_LIMITS.length; b++) {
+            if (pieces <= PHASE_LIMITS[b]) {
+                return b;
+            }
+        }
+        return PHASE_LIMITS.length - 1;
+    }
+
     private static int compareEvaluations(NnueNetwork network) {
         HandCraftedEvaluator handCrafted = new HandCraftedEvaluator();
         NnueEvaluator networkEvaluator = new NnueEvaluator(network);
