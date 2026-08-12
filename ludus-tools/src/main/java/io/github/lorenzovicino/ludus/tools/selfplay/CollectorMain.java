@@ -156,6 +156,27 @@ public final class CollectorMain {
     }
 
     /**
+     * Whether the next batch should be seeded from an endgame, given what has been written so far.
+     *
+     * <p>Decided from the running totals rather than from which thread is asking. An endgame position
+     * searches about ten times faster than a middlegame one at the same depth, so splitting the
+     * threads by the target fraction produced a dataset that was ninety per cent endgames when
+     * thirty-five per cent was asked for. Reading the totals makes the split self-correcting whatever
+     * the speed ratio happens to be — including on hardware where it is different.
+     */
+    static boolean wantsEndgame(int endgameSamples, int totalSamples, double fraction) {
+        if (fraction <= 0) {
+            return false;
+        }
+        if (fraction >= 1) {
+            return true;
+        }
+        // At the very start both counts are zero, and the comparison chooses endgames. That is the
+        // cheap kind, so the first correction arrives quickly.
+        return endgameSamples <= fraction * totalSamples;
+    }
+
+    /**
      * Generates on this machine, with no broker.
      *
      * <p>The queue earns its place when generation is spread across machines or run alongside
@@ -171,6 +192,7 @@ public final class CollectorMain {
                 threads, depth, endgameFraction * 100, targetSamples);
 
         AtomicInteger written = new AtomicInteger();
+        AtomicInteger endgameWritten = new AtomicInteger();
         AtomicInteger batchNumber = new AtomicInteger();
         Object writeLock = new Object();
 
@@ -181,12 +203,20 @@ public final class CollectorMain {
             Thread[] workers = new Thread[threads];
             for (int t = 0; t < threads; t++) {
                 long threadSeed = seed + t * 1_000_003L;
-                boolean endgames = endgameFraction > 0 && t < Math.max(1, Math.round(threads * endgameFraction));
                 workers[t] = new Thread(() -> {
                     SelfPlayGenerator generator = new SelfPlayGenerator();
                     long localSeed = threadSeed;
 
                     while (written.get() < targetSamples) {
+                        // Decided from what has been written, not from which thread this is. An
+                        // endgame position searches about ten times faster than a middlegame one at
+                        // the same depth, so splitting the threads by the target fraction produced a
+                        // dataset that was ninety per cent endgames when thirty-five was asked for.
+                        // Reading the running totals makes the split self-correcting whatever the
+                        // speed ratio turns out to be.
+                        boolean endgames =
+                                wantsEndgame(endgameWritten.get(), written.get(), endgameFraction);
+
                         List<String> starts = endgames
                                 ? EndgameSeeds.generate(gamesPerJob, localSeed)
                                 : OpeningBook.generate(gamesPerJob, 8, localSeed);
@@ -212,8 +242,12 @@ public final class CollectorMain {
                             }
                         }
                         int total = written.addAndGet(produced);
-                        if (batchNumber.incrementAndGet() % 10 == 0) {
-                            System.out.printf("%,d samples%n", total);
+                        if (endgames) {
+                            endgameWritten.addAndGet(produced);
+                        }
+                        if (batchNumber.incrementAndGet() % 20 == 0) {
+                            System.out.printf("%,d samples, %.0f%% endgame%n",
+                                    total, 100.0 * endgameWritten.get() / Math.max(1, total));
                         }
                     }
                 }, "selfplay-local-" + t);
@@ -224,7 +258,8 @@ public final class CollectorMain {
             }
         }
 
-        System.out.printf("%nwrote %,d samples to %s%n", written.get(), out.toAbsolutePath());
+        System.out.printf("%nwrote %,d samples (%.1f%% endgame) to %s%n", written.get(),
+                100.0 * endgameWritten.get() / Math.max(1, written.get()), out.toAbsolutePath());
         return written.get() > 0 ? 0 : 2;
     }
 

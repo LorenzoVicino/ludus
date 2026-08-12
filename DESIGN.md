@@ -1049,23 +1049,46 @@ and keeps the position only if the kings are not adjacent, no pawn sits on the f
 the side that just moved is not still in check, and the side to move has a legal reply. Walking
 further into self-play games would not have worked, because the games do not go there: they end in
 the middlegame or by the fifty-move rule. `--endgame-fraction` (default 0.35) decides the share, and
-the jobs are interleaved rather than grouped so a run cut short still contains both kinds. Measured
-on a sample: 38% of positions have eight pieces or fewer, against the 35% asked for.
+the jobs are interleaved rather than grouped so a run cut short still contains both kinds.
 
-**Depth was chosen by measuring rather than guessing.** Four ply deeper sounds expensive; it is not.
-Twenty threads on this machine:
+**Depth was chosen by measuring rather than guessing** — and then the measurement had to be redone,
+because the first one was taken on a mixed dataset and the two kinds of position do not cost remotely
+the same. Twenty-two threads on this machine, measured separately:
 
-| Teacher depth | Samples/minute |
-|---:|---:|
-| 6 (original) | 70,300 |
-| 8 | 12,500 |
-| 9 | 7,900 |
-| 10 | 4,700 |
+| | Samples/minute |
+|---|---:|
+| Openings, depth 6 (the original teacher) | 76,800 |
+| Openings, depth 8 | 21,700 |
+| **Openings, depth 10** | **5,850** |
+| **Endgames, depth 10** | **58,600** |
 
-Fifteen times slower per position, and still 600,000 positions in about two hours. Since the
-diagnosis said the problem was the *quality* of the labels and not their number, depth buys more than
-volume does, and depth 10 was affordable. The estimate this replaces — "about 30,000 positions a
-minute" — was measured at the shallower depth and does not survive the change.
+An endgame position searches about **ten times faster** than a middlegame one at the same depth, which
+is obvious in hindsight — six pieces is a far smaller tree than thirty-two — and which invalidated both
+the throughput estimate and, more seriously, the scheduler. Openings dominate the cost, so a
+700,000-position dataset at depth 10 is about ninety minutes rather than the two hours the mixed figure
+suggested. Since the diagnosis said the labels were *poor*, not *few*, depth buys more than volume, and
+depth 10 is affordable.
+
+#### The scheduling bug this exposed
+
+The first implementation split the generating **threads** by the target fraction: with 22 threads and
+`--endgame-fraction 0.35`, eight threads made endgames and fourteen made openings. Thirty-six per cent
+of the threads, which is essentially the thirty-five asked for, and that near-match is exactly why it
+looked right.
+
+It produced a dataset that was **91% endgames**, measured over 642,605 positions — the mirror image of
+the problem it was built to fix, with middlegames down to about 5%. Eight threads on the cheap kind
+outproduced fourteen on the expensive kind by roughly ten to one. Nothing failed; the run reported
+success.
+
+The fix is to decide from **what has been written** rather than from which thread is asking, which
+self-corrects whatever the speed ratio turns out to be — including on hardware where it is different.
+Re-measured after the fix: 26% seeded from endgames, and **43% of positions with eight pieces or
+fewer**, because opening games also reach endgames by being played. Those two numbers are not the same
+quantity, and conflating them is what made 38% look acceptable in the first smoke test.
+
+`DatasetBalanceTest` asserts the composition under deliberately lopsided yields, and runs the old
+policy through the same simulation so the property is demonstrably not free.
 
 **The queue stopped being mandatory.** `collect --local` generates in-process across N threads with
 no broker at all. RabbitMQ earns its place when generation is spread across machines or run alongside
