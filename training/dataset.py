@@ -25,8 +25,24 @@ class SelfPlayDataset(Dataset):
         scores: list[float] = []
         results: list[float] = []
 
+        # A limit reads across the file rather than truncating it, so a subset is a sample of the whole
+        # dataset and not of however it happens to be ordered.
+        #
+        # This was written to fix a bias that turned out not to be there. The generator's endgame share
+        # self-corrects from zero, so the first lines looked likely to be endgame-heavy — measured, the
+        # first 40,000 lines were 49.8% small positions against 49.6% across the file. The correction
+        # settles in seconds. The stride stays because nothing guarantees that of the next file, and a
+        # limit that means "the first N" is a trap either way, but it is not fixing an observed skew.
+        stride = 1
+        if limit is not None:
+            with open(path, "r", encoding="utf-8") as counting:
+                total = sum(1 for _ in counting)
+            stride = max(1, total // limit)
+
         with open(path, "r", encoding="utf-8") as handle:
-            for line in handle:
+            for index, line in enumerate(handle):
+                if index % stride != 0:
+                    continue
                 line = line.strip()
                 if not line:
                     continue
