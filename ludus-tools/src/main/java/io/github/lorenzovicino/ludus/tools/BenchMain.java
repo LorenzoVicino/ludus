@@ -124,6 +124,21 @@ public final class BenchMain {
     private static final int LABEL_LIMIT = 2_000;
 
     /**
+     * Bands of label magnitude, because a mean in centipawns is not a fair test on its own.
+     *
+     * <p>Training minimises squared error on {@code sigmoid(cp/400)}. At 2000 centipawns that sigmoid
+     * reads 0.993, so the target is saturated and the network is barely taught to separate +500 from
+     * +900 — correctly, because no engine needs to: both are winning, and the move played is the same.
+     * A mean in centipawns punishes exactly that irrelevant distinction, which would make this metric
+     * misleading in the same way comparing against the hand-crafted evaluation was.
+     *
+     * <p>Split by band, the two cases separate. Being worse near level is a real defect, because that
+     * is the band where the sign of a difference decides which move gets played. Being worse only in
+     * the far bands is an artefact of the loss and costs little.
+     */
+    private static final int[] LABEL_BANDS = {50, 150, 400, 1_000, LABEL_LIMIT};
+
+    /**
      * How well each evaluation predicts the labels, by phase.
      *
      * <pre>
@@ -164,6 +179,14 @@ public final class BenchMain {
         int[] counts = new int[buckets];
         int skipped = 0;
 
+        int bands = LABEL_BANDS.length;
+        long[] handByBand = new long[bands];
+        long[] networkByBand = new long[bands];
+        int[] countsByBand = new int[bands];
+        // Error in win-probability terms as well, which is the space the loss actually minimises.
+        double[] handProbability = new double[bands];
+        double[] networkProbability = new double[bands];
+
         try (Stream<String> stream = Files.lines(dataset)) {
             Iterator<String> iterator = stream.iterator();
             long index = -1;
@@ -188,8 +211,10 @@ public final class BenchMain {
                 Board board = Board.fromFen(line.substring(0, firstBar));
                 networkEvaluator.reset(board);
 
-                long handOff = Math.abs(handCrafted.evaluate(board) - label);
-                long networkOff = Math.abs(networkEvaluator.evaluate(board) - label);
+                int hand = handCrafted.evaluate(board);
+                int learned = networkEvaluator.evaluate(board);
+                long handOff = Math.abs(hand - label);
+                long networkOff = Math.abs(learned - label);
 
                 int bucket = bucketFor(board);
                 counts[bucket]++;
@@ -197,6 +222,14 @@ public final class BenchMain {
                 networkError[bucket] += networkOff;
                 handWorst[bucket] = Math.max(handWorst[bucket], handOff);
                 networkWorst[bucket] = Math.max(networkWorst[bucket], networkOff);
+
+                int band = bandFor(Math.abs(label));
+                countsByBand[band]++;
+                handByBand[band] += handOff;
+                networkByBand[band] += networkOff;
+                double target = winProbability(label);
+                handProbability[band] += Math.abs(winProbability(hand) - target);
+                networkProbability[band] += Math.abs(winProbability(learned) - target);
             }
         }
 
@@ -228,15 +261,61 @@ public final class BenchMain {
         long hand = totalHand / total;
         long learned = totalNetwork / total;
         System.out.printf(Locale.ROOT, "%n%-17s %9d %9d %9d%n", "all", total, hand, learned);
+
+        // The band table is the one to read. See LABEL_BANDS: a mean in centipawns alone would punish
+        // the network for not separating two winning positions, which no engine needs to do.
+        System.out.printf(Locale.ROOT, "%n%-17s %9s %9s %9s %9s %9s%n",
+                "|label|", "count", "hand cp", "net cp", "hand win%", "net win%");
+        int decisiveLosses = 0;
+        int decisiveBands = 0;
+        for (int b = 0; b < bands; b++) {
+            if (countsByBand[b] == 0) {
+                continue;
+            }
+            String label = b == 0 ? "0-" + LABEL_BANDS[0]
+                    : LABEL_BANDS[b - 1] + "-" + LABEL_BANDS[b];
+            System.out.printf(Locale.ROOT, "%-17s %9d %9d %9d %9.3f %9.3f%n",
+                    label, countsByBand[b],
+                    handByBand[b] / countsByBand[b], networkByBand[b] / countsByBand[b],
+                    handProbability[b] / countsByBand[b], networkProbability[b] / countsByBand[b]);
+            // The near-level bands are the ones where being wrong changes the move played.
+            if (LABEL_BANDS[b] <= 400) {
+                decisiveBands++;
+                if (networkProbability[b] > handProbability[b]) {
+                    decisiveLosses++;
+                }
+            }
+        }
+
         System.out.printf("%nmean error against a ten-ply label: hand %d cp, network %d cp%n",
                 hand, learned);
-        System.out.println(learned < hand
-                ? "the network predicts deep searches better than the evaluation they used"
-                : "the network is no better than the evaluation its labels came from, so it has "
-                        + "nothing to offer for its cost");
+        if (decisiveLosses == 0) {
+            System.out.println("the network predicts deep searches better than the evaluation they "
+                    + "used, in every band where the difference decides a move");
+        } else if (decisiveLosses < decisiveBands) {
+            System.out.printf("mixed: the network loses %d of %d near-level bands, which is where "
+                    + "being wrong changes the move played%n", decisiveLosses, decisiveBands);
+        } else {
+            System.out.println("the network is beaten by the evaluation its labels came from, in "
+                    + "every band that decides a move, so it has nothing to offer for its cost");
+        }
         System.out.println("inference path: " + NnueEvaluator.inferencePath());
         // Not an exit code that gates anything: it reports, and the SPRT decides.
         return 0;
+    }
+
+    private static int bandFor(int magnitude) {
+        for (int b = 0; b < LABEL_BANDS.length; b++) {
+            if (magnitude <= LABEL_BANDS[b]) {
+                return b;
+            }
+        }
+        return LABEL_BANDS.length - 1;
+    }
+
+    /** The same transform training uses, so the two numbers describe the same space. */
+    private static double winProbability(int centipawns) {
+        return 1.0 / (1.0 + Math.exp(-centipawns / 400.0));
     }
 
     private static int bucketFor(Board board) {

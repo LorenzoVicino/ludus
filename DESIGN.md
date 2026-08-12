@@ -1139,6 +1139,36 @@ Mean absolute error in centipawns. **It is worse than the hand-crafted evaluatio
 against 81. That is a far sharper statement than "a lossy copy with no upside", and it explains −541 Elo
 without appealing to speed at all.
 
+#### Why a mean in centipawns is not enough
+
+That table nearly repeated the mistake of §9.05 in subtler form. Training minimises squared error on
+`sigmoid(cp/400)`, which at 2000 centipawns reads 0.993 — **saturated**. So the network is barely taught
+to separate +500 from +900, and correctly so: both are winning and the move played is the same. A mean
+in centipawns punishes precisely that irrelevant distinction, so a network could score badly for a
+reason that costs no Elo at all.
+
+Split by label magnitude, and reported in win-probability terms as well — the space the loss actually
+minimises — the two cases separate:
+
+| \|label\| | Positions | Hand cp | Net cp | Hand win% | Net win% |
+|---|---:|---:|---:|---:|---:|
+| 0–50 | 2,089 | 42 | 117 | 0.026 | 0.071 |
+| 50–150 | 1,608 | 34 | 132 | 0.021 | 0.079 |
+| 150–400 | 2,305 | 45 | 131 | 0.026 | 0.070 |
+| 400–1000 | 1,526 | 113 | 160 | 0.046 | 0.059 |
+| 1000–2000 | 480 | 487 | **364** | 0.089 | **0.052** |
+
+The concern was legitimate and the answer is decisive: **2.7 to 3.8 times worse in win-probability terms
+in every band near level**, which is where the sign of a difference decides which move gets played. The
+defect is real, not an artefact of the metric.
+
+And it wins exactly one band — 1000–2000, where the hand-crafted evaluation is off by 487 centipawns and
+the network by 364. It learned to recognise thoroughly winning positions, which no engine needs help
+with, and failed at everything that decides a move.
+
+The verdict therefore reads the near-level bands, not the overall mean. **A metric that can be passed by
+being right where it does not matter is not a gate.**
+
 **It also corrects where §9.05 aimed.** Endgames do carry the largest absolute error, but the worst
 *proportional* gap is in the opening — 31 against 127, a factor of four and a half. The network is not
 weak in endgames; it is weak everywhere, and the endgame number was simply the part that showed up when
