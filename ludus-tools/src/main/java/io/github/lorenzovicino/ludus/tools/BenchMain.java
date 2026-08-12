@@ -304,7 +304,7 @@ public final class BenchMain {
         return 0;
     }
 
-    private static int bandFor(int magnitude) {
+    static int bandFor(int magnitude) {
         for (int b = 0; b < LABEL_BANDS.length; b++) {
             if (magnitude <= LABEL_BANDS[b]) {
                 return b;
@@ -313,8 +313,14 @@ public final class BenchMain {
         return LABEL_BANDS.length - 1;
     }
 
-    /** The same transform training uses, so the two numbers describe the same space. */
-    private static double winProbability(int centipawns) {
+    /**
+     * The same transform training uses, so the two numbers describe the same space.
+     *
+     * <p>The 400 is not free to differ from {@code SCALE} in {@code features.py}. If the two drift
+     * apart, this reports win-probability errors on a different scale from the one the loss minimised,
+     * and the comparison quietly stops meaning what it says. {@code PredictionMetricTest} pins it.
+     */
+    static double winProbability(int centipawns) {
         return 1.0 / (1.0 + Math.exp(-centipawns / 400.0));
     }
 
