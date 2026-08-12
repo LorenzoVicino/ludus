@@ -1037,6 +1037,12 @@ falling at the last epoch. But it is now second in line. The generation pipeline
 positions a minute on one machine, so twenty-five million is an evening across two, which is what the
 queue was built for.
 
+> **Both claims in that paragraph turned out to be wrong, and are corrected below.** The throughput
+> figure was measured on a mixed run and does not describe either kind of position (§9.06); the ordering
+> — data second in line — was reversed by §9.07, which found the network losing to the hand-crafted
+> evaluation as a *predictor*, and by the observation about validation loss in this very paragraph, which
+> was written down and then not acted on.
+
 The infrastructure for all of it is built and verified. The order of the remaining work is what
 changed.
 
@@ -1104,6 +1110,51 @@ no broker at all. RabbitMQ earns its place when generation is spread across mach
 training; requiring it to produce a dataset on one laptop was friction I had introduced, and it kept
 CI out of the pipeline entirely. The distributed path is unchanged and still the one the architecture
 diagram describes — there is now simply a way to do the same work without it.
+
+### 9.07 The measurement that revised the diagnosis
+
+§9.05 concluded, from `bench --compare`, that the network reproduced the hand-crafted evaluation in the
+middlegame and diverged by up to 300 centipawns in endgames. That was measured correctly and read too
+narrowly, because **agreement with the hand-crafted evaluation is the wrong axis** once the labels come
+from deep searches. A network trained on ten-ply verdicts *should* disagree with the raw evaluation:
+that disagreement is the knowledge it is supposed to hold. Scoring it on agreement rewards the defect.
+
+`bench --predict` asks the question the right way round. Given a position and what a deep search
+concluded about it, which evaluation is closer? The hand-crafted one is a fair baseline precisely
+because the labels were produced by searching with it, so a network that predicts those verdicts better
+has absorbed something the evaluation does not contain — which is the entire premise of NNUE.
+
+The first network, against depth-10 labels on 8,211 sampled positions:
+
+| Phase | Positions | Hand-crafted | Network |
+|---|---:|---:|---:|
+| Bare endgame | 3,543 | 90 | 136 |
+| Endgame | 877 | 148 | 178 |
+| Late middlegame | 998 | 95 | 157 |
+| Middlegame | 1,363 | 57 | 147 |
+| Opening | 1,430 | 31 | 127 |
+| **All** | **8,211** | **81** | **143** |
+
+Mean absolute error in centipawns. **It is worse than the hand-crafted evaluation in every phase**, 143
+against 81. That is a far sharper statement than "a lossy copy with no upside", and it explains −541 Elo
+without appealing to speed at all.
+
+**It also corrects where §9.05 aimed.** Endgames do carry the largest absolute error, but the worst
+*proportional* gap is in the opening — 31 against 127, a factor of four and a half. The network is not
+weak in endgames; it is weak everywhere, and the endgame number was simply the part that showed up when
+it was compared against its own teacher. Endgame coverage remains worth having, and is no longer the
+headline.
+
+The finding fits something recorded in §9.05 and not acted on: **validation loss was still falling at
+the last epoch.** A network that cannot beat the raw evaluation as a predictor, and was still improving
+when training stopped, is *undertrained* as well as badly taught. So the checkpoint-and-schedule changes
+may matter as much as the deeper teacher — which makes them two hypotheses under test at once, against
+the one-at-a-time rule of §5.5. Accepted here deliberately: that rule governs patches judged by Elo,
+where attribution is the whole difficulty, and this test is cheap enough to re-run with either half
+removed if the result needs attributing.
+
+**This check now runs before the SPRT**, in `tools/retrain.ps1`. It costs a minute. The SPRT costs hours
+and, for the first network, would only have confirmed what the minute already said.
 
 ### 9.1 M6 — the status page
 
