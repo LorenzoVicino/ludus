@@ -530,6 +530,39 @@ that one colour is better.
 establishing the *Elo baseline* the NNUE will be measured against. Over-tuning it only makes the Act
 II number less impressive.
 
+#### The one term that was not a tuning question
+
+"Do not tune it" is about *weights*. It is not licence to leave the evaluation stating things that are
+false, and it was: **king and bishop against a bare king read +368 centipawns.** King and knight, +353.
+Those positions cannot be won by any legal sequence of moves. That is not a constant slightly off, it
+is a claim about chess that is wrong.
+
+It was found while asking a different question. Across generated endgame positions the search averaged
+±400 centipawns while **68% of the games ended drawn**, and two halves of a label disagreeing that
+sharply wanted explaining.
+
+The cost is paid twice. In play, the engine chases material it cannot convert and declines draws it
+should welcome. In training, because **labels come from searches performed with this evaluation**, so
+every overvalued dead draw taught the network the same error faithfully. Measured on the dataset:
+**14% of positions have insufficient material, labelled at 235 centipawns on average when the truth is
+zero.**
+
+The rule added is the conservative one: no pawns, no rooks, no queens, at most one minor each. With two
+minors split one apiece there is no forced mate. King and bishop and bishop, and bishop and knight,
+against a bare king are real wins and are untouched — which matters as much as the fix, since an engine
+that scores two bishops as a draw has no reason to try to win it. Two knights against a bare king keeps
+its material score: mate cannot be *forced* there, but "cannot be forced" and "is a draw" are different
+claims and only the second justifies returning zero.
+
+**Measured: +18.9 ± 13.1 Elo**, LLR +3.15 against bounds ±2.94, H1 accepted over 1,218 games — on a book
+of 1,400 endgame positions with minors and pawns, drawn from generated games and deliberately excluding
+positions that are already dead draws, where both versions draw and the match measures nothing.
+
+That number is the effect *in the situations the fix is about*, not an estimate of overall strength, and
+quoting it as the latter would be wrong. A first attempt returned **inconclusive at +13.0 ± 23.4 over
+400 games** because the book ran out before the test could decide — recorded because the honest reading
+of that run was "no evidence yet", and a trend in the right direction is not a result.
+
 ---
 
 ## 7. Act II — NNUE
