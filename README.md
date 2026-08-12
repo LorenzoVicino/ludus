@@ -1,76 +1,144 @@
 # ludus
 
 [![CI](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml/badge.svg)](https://github.com/LorenzoVicino/ludus/actions/workflows/ci.yml)
-[![Status page](https://github.com/LorenzoVicino/ludus/actions/workflows/status.yml/badge.svg)](https://lorenzovicino.github.io/ludus/)
 
-**[Live status → lorenzovicino.github.io/ludus](https://lorenzovicino.github.io/ludus/)** — measured
-Elo, the milestone ladder, and every perft position recomputed on each run. Written by the build.
+**A chess engine written in Java, from scratch.**
 
-A UCI chess engine written in Java, built in two acts: first a classical engine with a
-hand-crafted evaluation, then an NNUE — a small neural network evaluation with an
-incrementally updated accumulator — replacing it.
+An engine is the part of a chess program that decides what to play. It has no board and no windows of
+its own: it is a program that reads a position on standard input and writes back a move. You point an
+existing chess application at it — Cute Chess, Arena, En Croissant — and play against it there, the way
+a car takes an engine.
 
-**Status: M3 complete.**
+```
+$ java -jar ludus-uci/target/ludus.jar
+uci
+position startpos moves e2e4 e7e5
+go movetime 1000
+info depth 9 score cp 24 nodes 1284551 nps 1284551 pv g1f3 b8c6 f1b5
+bestmove g1f3
+```
 
-> **+182 ± 40 Elo** over M2, from 195 wins, 54 draws and 51 losses across 300 games.
-> The SPRT crossed its bound at game 85.
+That is the whole interface. The rest of this file explains what is behind it, and why the project is
+shaped the way it is.
 
-The engine speaks UCI, loads into any chess GUI as a single jar, and searches with quiescence, a
-transposition table, killers and history, principal variation search, null move pruning and late
-move reductions. Move generation is magic bitboard based and validated by the full perft suite.
+---
 
-M3 was three patches and three separate SPRT matches, and **the first one was rejected** — which is
-the whole reason for measuring them one at a time. Null move pruning came out at −16 ± 36 Elo,
-because it was inert: its guard correctly refused to fire on wide search windows, and the engine had
-no narrow ones until principal variation search created them. Shipped without measurement, it would
-have been a feature that did nothing. The full account is in [`DESIGN.md`](DESIGN.md) §9.0.
+## What a chess engine actually does
 
-**Act II is built, and losing for a measurable reason.** The network runs — the accumulator matches a
-full recomputation bit for bit over 73,862 positions, and the engine reproduces PyTorch's own answer
-to within 4 centipawns — but the first trained network lost to the hand-crafted evaluation by
-**−589 ± 147 Elo**, so it is not the default.
+Two things, and keeping them separate is most of the design.
 
-Three plausible explanations were tested and two were wrong, which is the part worth reading.
+**It looks ahead.** From the position in front of it, it tries a move, then every reply, then every
+reply to that, as deep as the clock allows. The tree grows about thirty-five times per level, so brute
+force runs out immediately and almost all the work is in *not* searching: proving that a whole branch
+cannot matter, and abandoning it. That part is called **search**.
 
-**"It runs it wrongly."** No — the engine reproduces PyTorch's own answer to within 4 centipawns, and
-the incremental accumulator matches a full recomputation bit for bit.
+**It judges positions.** The search has to stop somewhere, and at the bottom something must answer
+"who is better here, and by how much?" — in centipawns, hundredths of a pawn. That part is called
+**evaluation**, and it is where the chess knowledge lives.
 
-**"It is too slow."** Partly. It was nineteen times slower than the hand-crafted evaluation; widening
-the weights to `int` and adding the Vector API took that to seven. Re-running the match bought fifty
-Elo. Real, and nowhere near the gap.
+The two are independent in a way that is easy to state and hard to keep: search does not need to know
+*how* a position is judged, only that some function will judge it. In this repository the search
+literally cannot name the network that judges positions — the module graph makes that a compilation
+error rather than a matter of discipline. That seam was cut on the first day, before there was anything
+to put on the other side of it.
 
-**"It needs more data."** No. It understands material perfectly — plus 976 centipawns for an extra
-queen — and 35% of its training positions are already beyond ±300.
+---
 
-What it actually is, from comparing the two evaluations position by position: **in the middlegame the
-network reproduces the hand-crafted evaluation within a few tens of centipawns; in endgames it is
-wrong by up to three hundred.** Its labels came from searches by the evaluation it is imitating, so
-where it copies well it has no upside and costs seven times as much, and where it copies badly it
-loses games. The fix is a better teacher and endgame coverage, not more of the same data.
+## Two acts
 
-[`DESIGN.md`](DESIGN.md) §9.05 has the full account with the numbers.
+The evaluation is built twice, deliberately.
 
-The architecture, the measurement strategy and the milestone plan are in [`DESIGN.md`](DESIGN.md).
+**Act I is written by hand.** Rules a human can state: a queen is worth about nine pawns, a knight on
+the rim is worse than one in the centre, doubled pawns are a liability, a king should hide behind its
+pawns early and march to the centre once the pieces are gone. Explicit, readable, and limited by what
+somebody thought to write down.
 
-## Architecture
+**Act II is learned.** A small neural network — an **NNUE**, the architecture modern engines use — is
+trained on positions the engine generates by playing itself, and replaces the hand-written function
+without a single line of the search changing.
+
+The order matters. Act I is what Act II is measured against: without a working engine first, "the
+network is good" has nothing to mean. It also means the interesting question is not "does the network
+work" but "does it beat the thing it replaced", which is a question with an answer.
+
+The network is a couple of hundred thousand small integers, and evaluating it has to happen millions of
+times per second. Two ideas make that possible, and both are why NNUE looks the way it does:
+
+- **The input is sparse and the change is tiny.** A position is described by which piece stands on
+  which square — 768 possible facts, of which at most 32 are true. Moving one piece changes two of
+  them. So the first layer's output is not recomputed; it is carried along and *adjusted*, two columns
+  added and two subtracted. That is the "incrementally updated accumulator", and it is the whole trick.
+- **It runs in integers.** Weights are quantised to bytes and shorts, which is fast and lossy, and the
+  loss is a real engineering problem rather than a footnote — the repository checks the integer engine
+  against the floating-point trainer position by position, because a network that is quietly a coarse
+  copy of the one that was trained plays worse for no visible reason.
+
+---
+
+## Why chess, and not something more useful
+
+Because chess is one of the few domains where you can find out whether you are right, and most software
+is not like that.
+
+### Correctness has an oracle
+
+From the starting position there are exactly **197,281** legal games four moves long. Not about that —
+exactly that. The counts are published for a set of standard positions, and a program that generates
+moves can be pointed at them:
+
+```bash
+./mvnw test -Pslow    # every published count, roughly 600 million positions
+```
+
+If it answers 197,280, there is a bug. Not "possibly" — a bug, and the count can be broken down per
+first move to say which branch to look in. Most programs have nothing like this: you write something,
+it seems to work, and "seems" is all you ever get.
+
+### Strength has an oracle too
+
+"This change made the engine better" is exactly the kind of claim that feels obvious and is often
+false. So no change to search or evaluation is kept on the strength of how sensible it reads. The new
+version plays several hundred games against the old one, and statistics decide whether the difference
+is real:
+
+```bash
+java -jar ludus-tools/target/ludus-match.jar local \
+    --engine-a "java -jar build/candidate.jar" \
+    --engine-b "java -jar build/baseline.jar" \
+    --pairs 250 --movetime 100 --sprt 0 10
+```
+
+Two details that are not decoration. Each opening is played **twice with the colours swapped**, because
+otherwise the match partly measures who drew White more often. And the test is an **SPRT** — a
+sequential test that stops as soon as the evidence is one-sided, which is what makes measuring every
+change affordable rather than a thing you promise to do later.
+
+It reports a verdict as an exit code, so a change can be gated on it without a human reading the
+output: `0` accepted, `1` rejected, `2` no decision.
+
+The rule is that a rejected change does not land, however good the code is. Changes have been rejected.
+`DESIGN.md` records them next to the reasoning that predicted otherwise, because those are the entries
+worth reading.
+
+---
+
+## How the code is laid out
 
 ```mermaid
 graph LR
   subgraph shipped["shipped in ludus.jar"]
-    uci["<b>ludus-uci</b><br/>protocol<br/><i>composition root</i>"]
-    search["<b>ludus-search</b><br/>alpha-beta, PVS<br/>table, pruning"]
-    eval["<b>ludus-eval</b><br/><b>Evaluator</b> interface<br/>+ hand-crafted"]
-    nnue["<b>ludus-nnue</b><br/>network, accumulator<br/>quantised inference"]
-    core["<b>ludus-core</b><br/>board, magic bitboards<br/>movegen, perft, SEE"]
+    uci["ludus-uci<br/>protocol, composition root"]
+    search["ludus-search<br/>alpha-beta, TT, pruning"]
+    eval["ludus-eval<br/>the evaluation interface"]
+    nnue["ludus-nnue<br/>network inference"]
+    core["ludus-core<br/>board, moves, attacks"]
   end
-
-  tools["<b>ludus-tools</b><br/>match runner, SPRT<br/>self-play, status page"]
+  tools["ludus-tools<br/>matches, datasets, benchmarks"]
 
   uci --> search
   uci -- "chooses one" --> nnue
   uci --> eval
   search --> eval
-  nnue -. "implements" .-> eval
   search --> core
   eval --> core
   nnue --> core
@@ -78,284 +146,107 @@ graph LR
   tools --> core
 ```
 
-**The arrow that is missing is the design.** There is no edge from `ludus-search` to `ludus-nnue`,
-and there never will be: the search depends on an interface, and the only module that knows which
-implementation exists is the one at the top. Swapping a hand-written evaluation for a neural network
-changes one line in the composition root and not a character of the search.
+`ludus-search` depends on `ludus-eval`, the *interface*, and not on `ludus-nnue`, the network. So the
+search cannot accidentally learn which evaluation it is using; only `ludus-uci`, the composition root,
+knows. **The arrow that is missing is the design.**
 
-That boundary was drawn in M1, months before there was anything to put behind it, and it has not
-moved since. It is also enforced rather than agreed: calling network code from the search is a
-compile error, not a code-review comment.
+`ludus-tools` is development tooling — it runs matches, generates training data and measures things —
+and never ships inside the engine. That is what keeps the engine itself free of third-party
+dependencies: it is a subprocess a GUI starts in milliseconds, and it has no business carrying a
+message broker into that.
 
-`ludus-tools` sits outside the shipped jar. It is the only place with a third-party dependency, which
-is how the engine a GUI launches has none at all.
+---
 
-## Why two acts
+## Building and running
 
-Act I is a conventional engine: bitboards, magic bitboard move generation, alpha-beta search
-with a transposition table, and an evaluation function written by hand.
-
-Act II replaces that evaluation with an NNUE, the technique that gained Stockfish several
-hundred Elo in 2020. The network is small, quantised to integers, and its first layer is
-updated incrementally as moves are made and unmade rather than recomputed from scratch.
-
-The point of splitting it this way is that the machine learning work has an **honest metric**.
-Act II is not "a project that uses a neural network" — it is a measured Elo delta between two
-versions of the same engine, established by an SPRT match. Most ML side projects report an
-accuracy figure on a dataset that means nothing outside that dataset. This one reports whether
-the engine actually got stronger.
-
-The architecture is designed so Act II is a plug-in and not a rewrite: the evaluation sits
-behind an interface with `onMakeMove` / `onUnmakeMove` hooks from day one, so the NNUE can
-maintain its accumulator without the search ever knowing it exists.
-
-## Correctness and strength are measured, not asserted
-
-Two oracles do the work, and both exist before the code they validate:
-
-**Perft** counts the leaves of the legal move tree at a given depth. The counts for standard
-positions are published, so a mismatch is proof of a move generation bug — and per-move
-counts at the root point at the branch containing it. It is a debugger, not just a test.
-
-**SPRT** decides whether a change actually helped. Every search or evaluation patch plays a
-match against the previous version under a sequential probability ratio test; if the test does
-not pass, the patch does not land. One patch at a time, so a regression is always attributable.
-
-The match runner lives in `ludus-tools` rather than being an external program, and reports its
-verdict as an exit code — 0 accepted, 1 rejected, 2 inconclusive — so CI can gate a patch on the
-result instead of on somebody reading the output:
+JDK 24 is the only prerequisite; the Maven wrapper fetches Maven itself.
 
 ```bash
-java -jar ludus-tools/target/ludus-match.jar \
-    --engine-a "java -jar build/candidate.jar" \
-    --engine-b "java -jar build/baseline.jar" \
-    --book build/openings.epd \
-    --pairs 100 --movetime 100 --concurrency 8 --sprt 0 10
+./mvnw verify          # build plus the fast test suite
+./mvnw test -Pslow     # deep perft counts and a full self-play game
 ```
 
-It plays every opening twice with the colours swapped, since otherwise a match measures the
-opening book as much as the engines. Time is a fixed allowance per move rather than a running
-clock: that separates what the search does with the time it gets from how well a version divides
-a clock, which are different questions.
+The split keeps the gating build quick. The slow suite counts hundreds of millions of positions, so it
+runs nightly and on demand rather than on every push.
 
-### Spreading a match across machines
+`./mvnw package` produces `ludus-uci/target/ludus.jar`, one self-contained file. Any UCI host takes
+`java -jar ludus-uci/target/ludus.jar` as an engine definition.
 
-A match is 300 to 500 games and its wall time is what limits how fast patches can be evaluated, so
-the runner also works as a coordinator and any number of workers, with RabbitMQ in between.
+Driving it by hand is the quickest way to watch it think, and one thing is worth watching for. Ask it
+about a position in the middle of an exchange and see whether the score settles as the depth climbs:
 
-```mermaid
-graph LR
-  subgraph m["measuring a patch"]
-    C["coordinator"] -- "opening pairs" --> MJ[("ludus.match.jobs")]
-    MJ --> W1["worker<br/>2 engines"]
-    MJ --> W2["worker<br/>2 engines"]
-    W1 -- "W-D-L" --> MR[("ludus.match.results")]
-    W2 --> MR
-    MR --> C
-  end
-
-  subgraph s["generating training data"]
-    K["collector"] -- "openings or endgames,<br/>whichever is behind" --> SJ[("ludus.selfplay.jobs")]
-    SJ --> G1["generator"]
-    SJ --> G2["generator"]
-    G1 -- "labelled positions" --> SS[("ludus.selfplay.samples")]
-    G2 --> SS
-    SS -- "written as they arrive" --> D["dataset"]
-    SS -- "counts what arrived" --> K
-  end
+```
+without quiescence:  depth 1  cp  25    depth 2  cp -140    depth 3  cp  50
+with quiescence:     depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
 ```
 
-Both halves are the same shape — a queue of work and a queue of results — which is why the broker
-plumbing is one class rather than two. Nothing is acknowledged until the work is finished and its
-output is published, so a machine that dies hands its job back instead of losing it.
+Swings of ±165 centipawns become ±30. Without quiescence the engine judges positions mid-exchange: at
+odd depths it has taken the last piece, at even depths its opponent has, and the score lurches. Chasing
+captures to a quiet position before judging removes the illusion, and it is the single largest gain in
+the project.
 
-**The arrow back into the collector is the one that earns the queue.** Jobs are not published up front;
-the queue is held at a shallow window and refilled with whichever kind of position the dataset is short
-of. Pre-publishing a whole run fixes its composition in advance and gets it wrong, because an endgame
-searches about ten times faster than a middlegame and a fixed proportion of *jobs* is not a fixed
-proportion of *positions*. The first attempt asked for 35% endgames and produced 91%. A plain loop
-cannot steer work it has already handed out.
+---
 
-None of this is required to build a dataset on one machine — `collect --local` does that with no broker
-at all. The queue is for spreading generation across machines, or running it beside training.
+## The tooling
 
 ```bash
-docker compose up -d                       # the broker
-
-java -jar ludus-tools/target/ludus-match.jar coordinator --pairs 250 --sprt 0 10
-
-java -jar ludus-tools/target/ludus-match.jar worker \
-    --engine-a "java -jar build/candidate.jar" \
-    --engine-b "java -jar build/baseline.jar" \
-    --movetime 100 --concurrency 4         # on each machine with cores to spare
-```
-
-Nothing is acknowledged until its games are played and the result is published, so a machine that
-dies mid-job hands the work back rather than losing it. That is verified rather than assumed: with a
-worker holding a job the queue reads `3 ready, 1 unacknowledged`; kill the process and it reads
-`4 ready, 0 unacknowledged`.
-
-This is the only third-party runtime dependency in the project, and it lives in `ludus-tools`, which
-never ships inside the engine jar. The engine a GUI launches still has none.
-
-### Generating training data
-
-The same pipeline produces the positions the NNUE of Act II will be trained on. Generators play
-self-play games and publish batches of labelled positions; a collector writes the dataset as they
-arrive, so generation and training can run at the same time on different machines:
-
-```bash
-java -jar ludus-tools/target/ludus-match.jar collect --samples 2000000 --out training/data/selfplay.txt
-
-java -jar ludus-tools/target/ludus-match.jar generate --concurrency 6   # on each machine
-```
-
-On one machine, with no broker involved:
-
-```bash
+# generate training positions on this machine, no infrastructure
 java -jar ludus-tools/target/ludus-match.jar collect --local \
-    --samples 700000 --depth 10 --endgame-fraction 0.35 --concurrency 22 \
-    --out build/selfplay-d10.txt
+    --samples 700000 --depth 10 --endgame-fraction 0.35 --out build/selfplay.txt
+
+# or spread generation and matches over several machines, with RabbitMQ between them
+docker compose up -d
+java -jar ludus-tools/target/ludus-match.jar collect --samples 2000000
+java -jar ludus-tools/target/ludus-match.jar generate --concurrency 6   # on each machine
+
+# how fast the search runs, which is a different question from how well it plays
+java -jar ludus-tools/target/ludus-match.jar bench --depth 8
 ```
 
-Endgames are **constructed rather than played into**: self-play between two copies of one engine ends in
-the middlegame or by the fifty-move rule, so a dataset built only from openings is thin exactly where a
-tapered evaluation behaves least like its middlegame self.
+Two notes on generating data, because both are less obvious than they look.
 
-### Is a trained network worth its cost?
+**Endgames have to be constructed, not played into.** An engine playing itself ends in the middlegame
+or by the fifty-move rule; it almost never reaches a real king-and-pawn ending. A dataset built only
+from openings is therefore thin exactly where the evaluation behaves least like its middlegame self, so
+endgame positions are placed on the board directly and played from there.
 
-A network is seven times slower to evaluate than the hand-written function it replaces, so it has to
-know something that function does not. That is measurable directly, and far more cheaply than a match:
+**The queue steers, rather than handing out a fixed list.** Jobs are refilled with whichever kind of
+position the dataset is currently short of. Publishing the whole run up front fixes its composition in
+advance and gets it wrong, because an endgame searches roughly ten times faster than a middlegame and a
+fixed share of *jobs* is not a fixed share of *positions*. A plain loop cannot steer work it has
+already handed out; that is what the broker is there for, along with surviving a machine dying
+mid-job.
 
-```bash
-java -jar ludus-tools/target/ludus-match.jar bench --predict build/holdout.txt --nnue build/ludus.nnue
-```
+A workflow also publishes a page with the current measurements, at
+[lorenzovicino.github.io/ludus](https://lorenzovicino.github.io/ludus/), written by the build rather
+than by hand.
 
-Given a position and what a ten-ply search concluded about it, how close does the network come?
-
-**And a warning that was learned the hard way.** The hand-written evaluation appears as a reference
-column, and it is *not* a fair opponent on this metric: the labels are search scores anchored to it, so
-near level it is predicting its own contribution to the target. It is part of the measurement, not a rival
-in it. Reading those columns as a contest produced a confident, wrong conclusion here for several hours.
-Use these numbers to compare networks with each other, where the bias is identical on both sides, and to
-see where in a game a network is weakest.
-
-Reported per phase and per label magnitude, and the second breakdown matters: training minimises error on
-`sigmoid(cp/400)`, which saturates past a few hundred centipawns, so a network is barely taught to
-separate +500 from +900 — correctly, since both are winning and the move played is the same. A mean in
-centipawns would punish that irrelevant distinction. **The verdict reads the bands near level, where the
-sign of a difference decides which move gets played.** A metric that can be passed by being right where
-it does not matter is not a gate.
-
-The number worth reading is the absolute one. Near level the current network is off by 0.07 in win
-probability, which is about **109 centipawns** — an evaluation wrong by more than a pawn where the sign
-decides the move. That statement needs no baseline, and it is enough to explain why the network loses.
-
-Whether a network is worth its cost is a question only a match answers. There is no cheap substitute,
-which is inconvenient and remains true.
-
-Most positions are discarded, and the filtering matters more than the volume: nothing while in check,
-nothing where the best move is a capture, no mate scores, and none of the random opening plies. A
-network trained on everything learns the noise too.
-
-Both labels — the search score and the game result — are from the side to move. On the first run of
-4,013 samples the mean score came out at −1.3 centipawns, which is the check that matters: with
-symmetric self-play it has to sit at zero, and anything else means a sign or perspective error.
-
-A third invariant guards Act II: the incrementally updated accumulator must be bit-for-bit
-identical to a full recomputation, verified by property tests over random games. A bug there
-does not crash anything — it just quietly makes the engine play worse.
+---
 
 ## Why Java
 
-Serious engines are written in C++ or Rust, which makes the JVM the interesting part rather
-than a handicap. Some of what the constraint forces:
+Serious engines are written in C++ or Rust, which makes the JVM the interesting part rather than a
+handicap. Some of what the constraint forces:
 
-- **Zero allocation in the search.** No objects in a loop that runs millions of times per
-  second: moves are packed into `int`s, move lists are preallocated per ply, and the
-  allocation rate during a long search is verified flat with JFR.
-- **Transposition table as parallel primitive arrays.** An array of entry *objects* costs a
-  second cache miss per lookup plus a header per entry; two `long[]` do not.
-- **No `PEXT`.** BMI2's parallel bit extract is not portably reachable from Java, so sliding
-  piece attacks use magic bitboards.
-- **Vector API** (`jdk.incubator.vector`) for the NNUE accumulator, with a tested scalar
-  fallback kept as the correctness reference.
+- **Zero allocation in the search.** No objects in a loop running millions of times a second: moves are
+  packed into `int`s, move lists are preallocated per ply, and the allocation rate during a long search
+  is verified flat with JFR.
+- **The transposition table as parallel primitive arrays.** An array of entry *objects* costs a second
+  cache miss per lookup plus an object header per entry; two `long[]` do not.
+- **No `PEXT`.** BMI2's parallel bit extract is not portably reachable from Java, so sliding-piece
+  attacks use magic bitboards.
+- **The Vector API** for network inference, with a tested scalar fallback kept as the correctness
+  reference — and kept because the incubator module has to be requested on the command line, which no
+  GUI does.
 
-## Roadmap
+---
 
-| | | Done when |
-|---|---|---|
-| **M0** ✅ | Board, magic bitboards, move generation | The full perft suite passes |
-| **M1** ✅ | Search, evaluation, UCI | Plays a complete legal game against a GUI |
-| **M2** ✅ | Quiescence, transposition table, killers, history, SEE | Beats M1 by SPRT — the Elo baseline |
-| **M3** ✅ | Principal variation search, null move, late move reductions | Perft still correct, every patch SPRT-positive |
-| **M4** ¾ | NNUE inference, first trained network | Accumulator invariant green, Java ≈ PyTorch, SPRT-positive vs M3 — three of four |
-| **M5** | Vector API, tuning, `halfKP` features | Higher nps at equal Elo, then higher Elo |
-| **M6** ✅ | Status page on GitHub Pages, SVG card on the profile | Updates itself from CI, no manual step |
+## Where the reasoning is
 
-## Playing against it
-
-`./mvnw package` produces `ludus-uci/target/ludus.jar`, a single self-contained engine. Point any
-UCI host at it:
-
-```
-java -jar ludus-uci/target/ludus.jar
-```
-
-Cute Chess, Arena, En Croissant and BanksiaGUI all take that command as an engine definition. It
-also drives from a terminal, which is the quickest way to see it think:
-
-```
-uci
-position startpos moves e2e4 e7e5 g1f3
-go movetime 1000
-```
-
-The score should now stay reasonably steady as the depth climbs. It did not before M2, and the
-difference is the clearest thing quiescence buys — on the same position after `e2e4 e7e5 g1f3 b8c6
-f1b5`:
-
-```
-M1:  depth 1  cp  25    depth 2  cp -140    depth 3  cp  50
-M2:  depth 1  cp  25    depth 2  cp   -5    depth 3  cp  15
-```
-
-Swings of ±165 centipawns became ±30. Without quiescence the engine judges positions in the middle
-of an exchange: at odd depths it gets the last capture, at even depths its opponent does, and the
-evaluation lurches accordingly. Following captures to a quiet position removes the illusion.
-
-## Building
-
-JDK 24 is the only prerequisite — the Maven wrapper fetches Maven itself.
-
-```bash
-./mvnw verify          # build and the fast suite: 95 tests, about 10 seconds
-./mvnw test -Pslow     # deep perft and a full self-play game: about 16 seconds
-```
-
-The slow suite is where the two claims above get checked: all 32 published perft counts, and a
-complete self-play game — 157 plies to a fifty-move draw at the time of writing — with every move
-the engine returns verified against the legal move list of the position it was handed.
-
-The split exists so the gating build stays quick. Deep perft counts roughly 600 million nodes, so
-it runs nightly and on demand rather than on every push.
-
-Current M0 measurements, from the deep suite:
-
-| Position | Depth | Nodes | Nodes/second |
-|---|---:|---:|---:|
-| Initial | 6 | 119,060,324 | 36.6 M |
-| Kiwipete | 5 | 193,690,690 | 53.8 M |
-| Position 3 | 6 | 11,030,083 | 46.0 M |
-| Position 4 | 5 | 15,833,292 | 49.8 M |
-| Position 5 | 5 | 89,941,194 | 47.8 M |
-| Position 6 | 5 | 164,075,551 | 55.2 M |
-
-A node here means pseudo-legal generation, `makeMove`, a legality check and `unmakeMove`. This is
-not search speed — there is no search yet — but it is the ceiling the search will be measured
-against, and it is what the zero-allocation discipline buys.
-
-Training scripts (Act II) will be a separate Python project under `training/`.
+[`DESIGN.md`](DESIGN.md) is the working design record: the architecture, the measurement strategy, and
+every place the implementation departed from the plan, recorded next to the original reasoning rather
+than edited out. The wrong turns are in there deliberately. A design document that stops tracking
+reality stops being worth reading.
 
 ## License
 
