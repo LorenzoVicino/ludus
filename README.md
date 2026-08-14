@@ -27,10 +27,19 @@ There is also an HTTP service, so the engine can be played from a web page inste
 
 ```bash
 docker compose up -d postgres
-./mvnw -pl ludus-server -am spring-boot:run
+./mvnw -pl ludus-server -am -DskipTests package
+java -jar ludus-server/target/ludus-server-0.1.0-SNAPSHOT.jar
 ```
 
 Then open **http://localhost:8080** for the board, or **/swagger-ui.html** for the API.
+
+For the usual development loop, `spring-boot:run` needs its full coordinates from the root of a
+multi-module build — the short `spring-boot:run` prefix is resolved against the top-level project, which
+does not declare the plugin:
+
+```bash
+./mvnw -pl ludus-server -am org.springframework.boot:spring-boot-maven-plugin:run
+```
 
 ```
 POST   /api/games                 start one; 201 with its location
