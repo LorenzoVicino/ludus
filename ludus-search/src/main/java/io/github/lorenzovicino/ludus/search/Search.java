@@ -63,6 +63,20 @@ public final class Search {
     private static final int NULL_MOVE_MIN_DEPTH = 3;
     private static final int NULL_MOVE_BASE_REDUCTION = 2;
 
+    /**
+     * How shallow a node has to be before its static score is trusted to stand in for a search, and how
+     * much slack that trust is given per remaining ply.
+     *
+     * <p>Both numbers were guesses, and they were written down as guesses because null move pruning was
+     * rejected here at −16 Elo after looking every bit as obviously correct. **Measured: +60.7 ± 27.6
+     * Elo** over 486 games, 231-108-147, LLR +2.96 against bounds of ±2.94.
+     *
+     * <p>They are still only the first pair of numbers that worked. Nothing was tried against them —
+     * a deeper cap or a wider margin might be better, and each alternative is its own match.
+     */
+    private static final int REVERSE_FUTILITY_MAX_DEPTH = 6;
+    private static final int REVERSE_FUTILITY_MARGIN = 85;
+
     private static final int LMR_MIN_DEPTH = 3;
     /** The first few moves are the ones ordering believes in, and they get searched in full. */
     private static final int LMR_MIN_MOVES = 3;
@@ -256,6 +270,22 @@ public final class Search {
         // on. Guessing wrong there costs a re-search; guessing wrong on a real window corrupts the
         // move the engine plays, so speculation is confined to the narrow ones.
         boolean isPv = beta - alpha > 1;
+
+        // Reverse futility pruning: if the position is already so far above beta that a whole search is
+        // unlikely to drag it back down, take the static score and stop. This is the cheaper sibling of
+        // null move pruning — it asks the same question without playing a move at all — so it goes
+        // first, and every node it answers is a null-move search that never happens.
+        //
+        // The margin grows with remaining depth because depth is how much the score can still move.
+        // Guarded the same way, and for the same reasons: only on narrow windows, never in check, and
+        // never near mate scores, where a linear margin in centipawns describes nothing.
+        if (!isPv && !inCheck && depth <= REVERSE_FUTILITY_MAX_DEPTH
+                && Math.abs(beta) < MATE_THRESHOLD) {
+            int staticScore = evaluator.evaluate(board);
+            if (staticScore - REVERSE_FUTILITY_MARGIN * depth >= beta) {
+                return staticScore;
+            }
+        }
 
         // Null move pruning: hand the opponent a free move, and if the position is still good enough
         // to fail high at reduced depth, it was never worth searching properly. Almost any real move
