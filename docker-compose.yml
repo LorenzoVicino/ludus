@@ -37,7 +37,9 @@ services:
         # that is up but not yet accepting connections.
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      # 9090, not 8080: the management endpoints live on their own port so that publishing 8080 does not
+      # publish them. Inside the container both are reachable, which is the point of splitting them.
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/actuator/health"]
       interval: 10s
       timeout: 3s
       retries: 12

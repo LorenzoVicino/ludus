@@ -285,6 +285,34 @@ than by hand.
 
 ---
 
+### Putting it on the internet
+
+`fly.toml` deploys it, and the settings in it are the interesting part rather than the command. Three
+things are true of a public instance that are not true of one on a laptop:
+
+**One caller must not be able to take the whole machine.** The engine pool already bounds how many searches
+run at once, but not how many one client may ask for in a row — and a search is *seconds* of a core. So the
+expensive endpoints get a much smaller allowance than the cheap ones: reading a position is a database row,
+asking the engine to think is CPU nobody else can use. Refusals come back as **429 with a `Retry-After`**,
+because "try later" without a number is not information. The limit is off by default, since on a laptop it
+only obstructs whoever is testing.
+
+**Games have to expire.** Starting one costs no account and no confirmation, which is what makes it
+pleasant to try and also means the table grows for as long as the service is up — and anything public gets
+crawled. Untouched games are swept after a fortnight: long enough that a shared link works tomorrow. There
+is nothing to anonymise first, because a game holds a starting position and a list of moves and nothing
+about who played it.
+
+**Metrics are for whoever runs it, not whoever visits.** All the management endpoints moved to their own
+port, and only 8080 is published. They carry no secrets, but they do describe the machine — pool size,
+heap, timings, whether the database is reachable — and an endpoint nobody needs publicly should not be
+publicly reachable.
+
+Two honest costs of the free tier, stated because they are real. The machine **stops when nobody is
+playing**, so the first move after a quiet spell waits several seconds for a JVM to start. And a shared CPU
+plays *weaker* chess rather than slower chess — which is deliberate: the difficulty levels are capped by
+time as well as by depth, so a slow machine produces a shallower search rather than a request that hangs.
+
 ## The decisions in the web service
 
 A chess engine turns out to be an awkward thing to put behind HTTP, in ways that make the service more

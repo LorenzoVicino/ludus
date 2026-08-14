@@ -44,7 +44,28 @@ ludus:
     # same choice the UCI EvalFile option makes.
     eval-file: ""
 
+  games:
+    # How long an untouched game survives. Long enough that a shared link works tomorrow, short enough that
+    # a month of crawlers starting games is not kept forever - see GameReaper.
+    keep-for: P14D
+
+  rate-limit:
+    # Off here, on in the deployment. On a laptop a limit only obstructs the person testing.
+    enabled: false
+    reads-per-minute: 120
+    engine-per-minute: 20
+    window: 1m
+
 management:
+  server:
+    # A separate port, and only 8080 is published to the internet.
+    #
+    # Metrics and health details are for whoever runs the service, not for whoever visits it. They carry no
+    # secrets, but they do describe the machine — pool size, heap, timings, the database being reachable —
+    # and an endpoint nobody needs publicly should not be publicly reachable. Splitting the port is the whole
+    # measure: inside the container everything is still there on 9090, so healthchecks and a scrape from a
+    # sidecar work unchanged.
+    port: 9090
   endpoints:
     web:
       exposure:
