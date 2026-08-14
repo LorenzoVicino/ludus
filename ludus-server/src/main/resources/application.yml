@@ -50,8 +50,17 @@ ludus:
     keep-for: P14D
 
   rate-limit:
-    # Off here, on in the deployment. On a laptop a limit only obstructs the person testing.
-    enabled: false
+    # On by default.
+    #
+    # It was off, on the reasoning that a limit only obstructs whoever is testing and the deployment would
+    # switch it on. There is no deployment, and a limit that is off protects nobody - so it was either dead
+    # code or a default. It is a default: docker compose binds every interface, so running the demo serves
+    # it to whatever network the machine is on.
+    #
+    # The allowances are where a person playing chess never meets them. Twenty searches a minute is a move
+    # every three seconds, sustained, which no human does; a hundred and twenty reads is far more than a
+    # board redraw needs.
+    enabled: true
     reads-per-minute: 120
     engine-per-minute: 20
     window: 1m

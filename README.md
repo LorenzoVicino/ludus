@@ -285,33 +285,28 @@ than by hand.
 
 ---
 
-### Putting it on the internet
+### Running it is running a small server
 
-`fly.toml` deploys it, and the settings in it are the interesting part rather than the command. Three
-things are true of a public instance that are not true of one on a laptop:
+There is no hosted instance, deliberately — this is something you clone and run. But `docker compose` binds
+to every interface, so running the demo means serving it to whatever network the machine is on, and three
+things follow from that whether or not anybody deploys it.
 
-**One caller must not be able to take the whole machine.** The engine pool already bounds how many searches
-run at once, but not how many one client may ask for in a row — and a search is *seconds* of a core. So the
-expensive endpoints get a much smaller allowance than the cheap ones: reading a position is a database row,
-asking the engine to think is CPU nobody else can use. Refusals come back as **429 with a `Retry-After`**,
-because "try later" without a number is not information. The limit is off by default, since on a laptop it
-only obstructs whoever is testing.
+**One caller cannot take the whole machine.** The engine pool bounds how many searches run at once; it does
+nothing about how many one client asks for in a row, and a search is *seconds* of a core. So the expensive
+endpoints have a much smaller allowance than the cheap ones — reading a position is a database row, asking
+the engine to think is CPU nobody else can use — and refusals come back as **429 with a `Retry-After`**,
+because "try later" without a number is not information. The allowances are set where a person playing chess
+never meets them.
 
-**Games have to expire.** Starting one costs no account and no confirmation, which is what makes it
-pleasant to try and also means the table grows for as long as the service is up — and anything public gets
-crawled. Untouched games are swept after a fortnight: long enough that a shared link works tomorrow. There
-is nothing to anonymise first, because a game holds a starting position and a list of moves and nothing
-about who played it.
+**Games expire.** Starting one costs no account and no confirmation, which is what makes it pleasant to try
+and also means the table grows for as long as the service runs. Untouched games are swept after a fortnight,
+long enough that a shared link works tomorrow. Nothing is anonymised first because there is nothing to
+anonymise: a game is a starting position and a list of moves.
 
-**Metrics are for whoever runs it, not whoever visits.** All the management endpoints moved to their own
-port, and only 8080 is published. They carry no secrets, but they do describe the machine — pool size,
-heap, timings, whether the database is reachable — and an endpoint nobody needs publicly should not be
-publicly reachable.
-
-Two honest costs of the free tier, stated because they are real. The machine **stops when nobody is
-playing**, so the first move after a quiet spell waits several seconds for a JVM to start. And a shared CPU
-plays *weaker* chess rather than slower chess — which is deliberate: the difficulty levels are capped by
-time as well as by depth, so a slow machine produces a shallower search rather than a request that hangs.
+**Metrics are for whoever runs it, not whoever reaches it.** The management endpoints are on their own port
+and only 8080 is published. They hold no secrets, but they describe the machine — pool size, heap, timings,
+whether the database is reachable — and an endpoint nobody needs from outside should not be reachable from
+outside.
 
 ## The decisions in the web service
 

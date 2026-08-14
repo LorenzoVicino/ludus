@@ -45,7 +45,12 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 @AutoConfigureMockMvc
 @TestPropertySource(properties = {
         "ludus.engine.pool-size=2",
-        "ludus.engine.hash-megabytes=1"
+        "ludus.engine.hash-megabytes=1",
+        // The limit is on in production and off here, and turning it off is the point rather than a
+        // convenience: these tests make a dozen engine calls in a second from one address, which is exactly
+        // the traffic the limit exists to refuse. Left on, adding two tests would break the suite with a 429
+        // that says nothing about the code under test. The filter has its own tests.
+        "ludus.rate-limit.enabled=false"
 })
 class PlayingAGameTest {
 

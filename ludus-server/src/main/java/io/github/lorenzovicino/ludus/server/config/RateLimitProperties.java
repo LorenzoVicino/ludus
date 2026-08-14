@@ -8,8 +8,9 @@ import org.springframework.validation.annotation.Validated;
 /**
  * How much of the service one caller may use.
  *
- * @param enabled         off by default. On a laptop a limit only gets in the way of the person testing;
- *                        it is the deployment that needs it, and turning it on there is one variable
+ * @param enabled         on by default. It was off, on the reasoning that only a deployment needs a limit;
+ *                        there is no deployment, and a limit that is off protects nobody. See the note in
+ *                        application.yml
  * @param readsPerMinute  reads, writes that do not search, and deletes. A database row each
  * @param enginePerMinute anything that makes the engine think. Far smaller, because a search is seconds of
  *                        a core that nobody else can use while it runs — see {@code RateLimitFilter} for
