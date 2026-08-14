@@ -91,11 +91,16 @@ class PlayingAGameTest {
         assertTrue(result.get("game").get("yourTurn").asBoolean(), "back to the human");
 
         // Reading it back proves the moves round-tripped through Postgres rather than living in memory.
+        //
+        // One version bump for two moves, not two: both are written in a single save. That is the
+        // property worth pinning — if the search fails, nothing is stored, so the game can never be left
+        // holding the human's move with the engine's reply missing and nobody able to move. The pair is
+        // atomic or it did not happen.
         mvc.perform(get("/api/games/{id}", id))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.plies").value(2))
                 .andExpect(jsonPath("$.moves[0]").value("e2e4"))
-                .andExpect(jsonPath("$.version").value(2));
+                .andExpect(jsonPath("$.version").value(1));
     }
 
     @Test
