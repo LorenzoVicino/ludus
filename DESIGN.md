@@ -414,9 +414,30 @@ serves both ordering and quiescence pruning, and it is subtle code.
 
 ### 5.5 Pruning and reductions — one at a time
 
-**Landed and measured:** null move pruning, late move reductions. **Next:** futility pruning, reverse
-futility — reverse futility is written and waiting for its match on the `search-reverse-futility`
-branch, because an unmeasured patch has no business on `main`.
+**Landed and measured:** null move pruning, late move reductions, **reverse futility pruning**.
+**Next:** ordinary futility pruning at the move level.
+
+#### Reverse futility pruning: +60.7 ± 27.6 Elo
+
+If a node's static score already stands far enough above beta, return it instead of searching. The cheaper
+sibling of null move pruning — the same question without playing a move — so it sits ahead of it, and every
+node it answers is a null-move search that never happens. Guarded identically: narrow windows only, never
+in check, never near mate scores, where a margin in centipawns describes nothing.
+
+Measured over **486 games, 231-108-147**, LLR +2.96 against bounds of ±2.94. Depth cap 6, margin 85
+centipawns per remaining ply.
+
+Two things about how it was measured rather than about the patch.
+
+**The branch was thirty commits stale**, having been written before the insufficient-material fix and the
+quantisation work landed. Matching it as it stood would have compared *the patch plus everything that
+arrived in the meantime* and credited the total to reverse futility. The candidate was rebuilt as current
+`main` plus the twenty-seven lines, so the only difference between the two binaries is the patch — 98
+bytes of it.
+
+**The constants are the first pair that worked, not a tuned pair.** Nothing was tried against them. A
+deeper cap or a wider margin might be better, and each alternative is its own match; recording that here
+stops the numbers reading as though they had been chosen.
 
 **The rule: one patch at a time, each with its own SPRT.** Add three together and watch the Elo drop,
 and you do not know which one did it. This is where the discipline of §1.2 repays the cost of having
