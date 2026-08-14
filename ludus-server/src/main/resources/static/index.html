@@ -2,7 +2,7 @@
 <!--
   One file, no build step, no dependencies.
 
-  Not a stylistic preference: this page is served by the same jar as the API, and a page that needs npm
+  Not a stylistic preference: this page is served by the same jar as the API, and a page that needed npm
   to exist would mean the service could not be run with one command. The board is inline SVG and the
   pieces are Unicode, so there is nothing to fetch and nothing to go stale.
 -->
@@ -10,91 +10,160 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>ludus</title>
 <style>
+  /*
+    Light by default, dark when the reader's system asks for it. Every colour is a token defined once
+    here, so the dark block below only has to restate the handful that actually change roles.
+  */
   :root {
-    --bg: #14171c;
-    --panel: #1c2028;
-    --line: #2a2f3a;
-    --text: #e6e8ec;
-    --dim: #8b93a3;
-    --light: #ebecd0;
-    --dark: #6f8f5a;
-    --from: #f6d76b;
-    --to: #f0c94a;
-    --legal: rgba(20, 23, 28, .28);
-    --accent: #7aa2f7;
-    --bad: #e06c75;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px;
-    background: var(--bg); color: var(--text);
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-    display: flex; justify-content: center;
-  }
-  .app { width: 100%; max-width: 980px; }
-  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -.01em; }
-  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
-  .sub a { color: var(--accent); }
-  .layout { display: grid; grid-template-columns: minmax(280px, 1fr) 320px; gap: 20px; align-items: start; }
-  @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+    --paper:      #fcfcfb;
+    --ink:        #1b1c1e;
+    --muted:      #74767b;
+    --faint:      #9a9ca1;
+    --rule:       #e7e6e2;
+    --raised:     #f4f3f0;
 
-  .board-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-  svg { width: 100%; height: auto; display: block; border-radius: 6px; }
+    --light-sq:   #eeedea;
+    --dark-sq:    #b3b0a6;
+    --moved:      #e4d9a9;
+    --marker:     rgba(27, 28, 30, .22);
+    --chosen:     #1b1c1e;
+
+    --white-pc:   #ffffff;
+    --white-edge: #43443f;
+    --black-pc:   #2c2d2f;
+
+    --accent:     #1b1c1e;
+    --on-accent:  #fcfcfb;
+    --warn:       #a4463c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:      #16171a;
+      --ink:        #e9e8e4;
+      --muted:      #8d8f95;
+      --faint:      #6c6e74;
+      --rule:       #26282c;
+      --raised:     #1d1f23;
+
+      --light-sq:   #d5d3cc;
+      --dark-sq:    #7e8275;
+      --moved:      #b9a870;
+      --marker:     rgba(10, 11, 12, .3);
+      --chosen:     #e9e8e4;
+
+      --accent:     #e9e8e4;
+      --on-accent:  #16171a;
+      --warn:       #d98d84;
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 40px 24px 56px;
+    background: var(--paper);
+    color: var(--ink);
+    font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    justify-content: center;
+  }
+  .page { width: 100%; max-width: 940px; }
+
+  header { margin-bottom: 34px; }
+  h1 {
+    font-size: 19px; font-weight: 600; letter-spacing: -.015em;
+    margin: 0 0 3px;
+  }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  header a { color: inherit; text-decoration: none; border-bottom: 1px solid var(--rule); }
+  header a:hover { border-bottom-color: var(--muted); }
+
+  .split { display: grid; grid-template-columns: 1fr 236px; gap: 44px; align-items: start; }
+  @media (max-width: 760px) { .split { grid-template-columns: 1fr; gap: 32px; } }
+
+  svg { width: 100%; height: auto; display: block; }
   .sq { cursor: pointer; }
   /*
-    Everything drawn on top of a square has to be transparent to clicks. The legal-move dots sit
-    exactly where you are about to click, so without this the indicator swallows the click meant for
-    the square underneath it and nothing happens at all - which is a bug you cannot see, only feel.
+    Everything drawn over a square must be transparent to clicks. The markers sit exactly where you are
+    about to click, so without this the marker swallows the click meant for the square beneath it and
+    nothing happens at all — a bug you cannot see, only feel.
   */
-  .hint, .piece { pointer-events: none; }
-  .piece { font-size: 62px; user-select: none; }
-  .piece.w { fill: #fff; stroke: #333; stroke-width: 1.1px; paint-order: stroke; }
-  .piece.b { fill: #2b2b2b; stroke: #ddd; stroke-width: 1.1px; paint-order: stroke; }
+  .mark, .piece, .coord { pointer-events: none; }
+  .piece { font-size: 66px; user-select: none; }
+  .piece.w { fill: var(--white-pc); stroke: var(--white-edge); stroke-width: 1.4px; paint-order: stroke; }
+  .piece.b { fill: var(--black-pc); }
+  .coord { font-size: 13px; fill: var(--ink); opacity: .34; user-select: none; }
 
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .panel + .panel { margin-top: 14px; }
-  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim);
-              margin: 0 0 12px; font-weight: 600; }
-  label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
-  select, button {
-    width: 100%; padding: 9px 11px; border-radius: 8px; font: inherit;
-    background: #232833; color: var(--text); border: 1px solid var(--line);
+  /* The sidebar has no boxes. Groups are separated by space and one hairline, nothing else. */
+  .group + .group { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--rule); }
+  .group h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--faint); margin: 0 0 14px;
   }
-  button { cursor: pointer; font-weight: 600; }
-  button.primary { background: var(--accent); color: #10131a; border-color: transparent; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .row { display: flex; gap: 8px; margin-top: 12px; }
 
-  .status { font-size: 14px; min-height: 22px; }
-  .status.bad { color: var(--bad); }
-  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
-  dt { color: var(--dim); }
-  dd { margin: 0; font-variant-numeric: tabular-nums; }
-  .moves { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
-           color: var(--dim); max-height: 120px; overflow-y: auto; word-break: break-all; }
-  .think { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
-           max-height: 150px; overflow-y: auto; }
-  .think div { padding: 1px 0; color: var(--dim); }
-  .think div:first-child { color: var(--text); }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 5px; }
+  select {
+    width: 100%; padding: 7px 0; margin-bottom: 16px;
+    font: inherit; color: var(--ink);
+    background: transparent; border: 0; border-bottom: 1px solid var(--rule);
+    border-radius: 0; cursor: pointer;
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%),
+                      linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+    background-position: calc(100% - 9px) 15px, calc(100% - 4px) 15px;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+  select:focus-visible { outline: none; border-bottom-color: var(--ink); }
+
+  button {
+    font: inherit; font-size: 14px; cursor: pointer; border-radius: 6px;
+    padding: 8px 14px; border: 1px solid var(--rule); background: transparent; color: var(--ink);
+  }
+  button:hover:not(:disabled) { background: var(--raised); }
+  button.solid { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+  button.solid:hover:not(:disabled) { opacity: .86; background: var(--accent); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.wide { width: 100%; }
+  .buttons { display: flex; gap: 8px; }
+
+  .state { font-size: 14px; margin: 16px 0 0; min-height: 22px; }
+  .state.bad { color: var(--warn); }
+
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 7px 16px; font-size: 13px; margin: 0; }
+  .facts dt { color: var(--muted); }
+  .facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11.5px; line-height: 1.75;
+  }
+  .stream { max-height: 150px; overflow-y: auto; margin-top: 12px; }
+  .stream div { color: var(--muted); white-space: nowrap; }
+  .stream div:first-child { color: var(--ink); }
+  .history { color: var(--muted); word-break: break-all; max-height: 92px; overflow-y: auto; }
 </style>
 </head>
 <body>
-<div class="app">
-  <h1>ludus</h1>
-  <p class="sub">
-    A chess engine written from scratch in Java. Click a piece, then a square.
-    <a href="/swagger-ui.html">API</a> · <a href="https://github.com/LorenzoVicino/ludus">source</a>
-  </p>
+<div class="page">
+  <header>
+    <h1>ludus</h1>
+    <p>
+      A chess engine written from scratch in Java. Click a piece, then a square.
+      <a href="/swagger-ui.html">API</a> · <a href="https://github.com/LorenzoVicino/ludus">Source</a>
+    </p>
+  </header>
 
-  <div class="layout">
-    <div class="board-wrap">
-      <svg id="board" viewBox="0 0 800 800" role="img" aria-label="Chess board"></svg>
-    </div>
+  <div class="split">
+    <svg id="board" viewBox="0 0 800 800" role="img" aria-label="Chess board"></svg>
 
     <div>
-      <div class="panel">
+      <div class="group">
         <h2>Game</h2>
         <label for="level">Strength</label>
         <select id="level">
@@ -109,32 +178,32 @@
           <option value="true" selected>White</option>
           <option value="false">Black</option>
         </select>
-        <div class="row">
-          <button class="primary" id="new">New game</button>
+        <div class="buttons">
+          <button class="solid" id="new">New game</button>
           <button id="resign">Resign</button>
         </div>
-        <p class="status" id="status" style="margin:12px 0 0">Start a game.</p>
+        <p class="state" id="status">Start a game.</p>
       </div>
 
-      <div class="panel">
-        <h2>Last reply</h2>
-        <dl>
-          <dt>Move</dt><dd id="m-move">–</dd>
-          <dt>Evaluation</dt><dd id="m-score">–</dd>
-          <dt>Depth</dt><dd id="m-depth">–</dd>
-          <dt>Nodes</dt><dd id="m-nodes">–</dd>
+      <div class="group">
+        <h2>Its reply</h2>
+        <dl class="facts">
+          <dt>Move</dt><dd id="m-move">—</dd>
+          <dt>Score</dt><dd id="m-score">—</dd>
+          <dt>Depth</dt><dd id="m-depth">—</dd>
+          <dt>Positions</dt><dd id="m-nodes">—</dd>
         </dl>
       </div>
 
-      <div class="panel">
+      <div class="group">
         <h2>Thinking</h2>
-        <button id="analyse">Show me what it sees</button>
-        <div class="think" id="think" style="margin-top:10px"></div>
+        <button class="wide" id="analyse">Show me what it sees</button>
+        <div class="stream mono" id="think"></div>
       </div>
 
-      <div class="panel">
+      <div class="group">
         <h2>Moves</h2>
-        <div class="moves" id="moves">–</div>
+        <div class="history mono" id="moves">—</div>
       </div>
     </div>
   </div>
@@ -143,7 +212,11 @@
 <script>
 'use strict';
 
-const GLYPH = { P:'♙', N:'♘', B:'♗', R:'♖', Q:'♕', K:'♔' };
+/*
+  The solid glyphs for both colours, coloured by fill rather than by using the outlined set for white.
+  Mixing the two Unicode sets makes the white pieces look like a different typeface from the black ones.
+*/
+const GLYPH = { P: '♟', N: '♞', B: '♝', R: '♜', Q: '♛', K: '♚' };
 const FILES = 'abcdefgh';
 
 let game = null;
@@ -155,60 +228,68 @@ const $ = id => document.getElementById(id);
 
 /** The board is drawn from the FEN, so the server's position is the only position. */
 function draw() {
-  const svg = $('board');
-  const placement = game ? game.fen.split(' ')[0] : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  const placement = game ? game.fen.split(' ')[0]
+                         : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
   const rows = placement.split('/');
   const last = game && game.moves.length ? game.moves[game.moves.length - 1] : null;
-  const parts = [];
 
+  const at = new Map();
   for (let rank = 0; rank < 8; rank++) {
     let file = 0;
     for (const ch of rows[rank]) {
       if (ch >= '1' && ch <= '8') { file += +ch; continue; }
-      const square = FILES[file] + (8 - rank);
-      const piece = { square, glyph: GLYPH[ch.toUpperCase()], colour: ch === ch.toUpperCase() ? 'w' : 'b' };
-      parts.push(piece);
+      at.set(FILES[file] + (8 - rank), {
+        glyph: GLYPH[ch.toUpperCase()],
+        colour: ch === ch.toUpperCase() ? 'w' : 'b'
+      });
       file++;
     }
   }
 
-  const at = new Map(parts.map(p => [p.square, p]));
   let out = '';
-
   for (let row = 0; row < 8; row++) {
     for (let col = 0; col < 8; col++) {
       const rank = flipped ? row + 1 : 8 - row;
       const file = flipped ? FILES[7 - col] : FILES[col];
       const square = file + rank;
       const x = col * 100, y = row * 100;
-      const shade = (row + col) % 2 === 0 ? 'var(--light)' : 'var(--dark)';
 
-      let fill = shade;
-      if (last && square === last.slice(0, 2)) fill = 'var(--from)';
-      else if (last && square === last.slice(2, 4)) fill = 'var(--to)';
+      let fill = (row + col) % 2 === 0 ? 'var(--light-sq)' : 'var(--dark-sq)';
+      if (last && (square === last.slice(0, 2) || square === last.slice(2, 4))) fill = 'var(--moved)';
 
       out += `<rect class="sq" data-sq="${square}" x="${x}" y="${y}" width="100" height="100" fill="${fill}"/>`;
 
-      // A dot on every square this piece may go to. The server sent the legal moves with the position,
-      // so the browser never has to guess and never has to ask.
+      // A marker on every square this piece may reach. The server sends the legal moves with the
+      // position, so the browser never guesses and never has to ask.
       if (selected && game && game.legalMoves.some(m => m.startsWith(selected + square))) {
-        const target = at.get(square);
-        out += target
-          ? `<circle class="hint" cx="${x + 50}" cy="${y + 50}" r="44" fill="none" stroke="var(--legal)" stroke-width="7"/>`
-          : `<circle class="hint" cx="${x + 50}" cy="${y + 50}" r="15" fill="var(--legal)"/>`;
+        out += at.has(square)
+          ? `<circle class="mark" cx="${x + 50}" cy="${y + 50}" r="43" fill="none"
+                     stroke="var(--marker)" stroke-width="6"/>`
+          : `<circle class="mark" cx="${x + 50}" cy="${y + 50}" r="13" fill="var(--marker)"/>`;
       }
       if (selected === square) {
-        out += `<rect class="hint" x="${x + 2}" y="${y + 2}" width="96" height="96" fill="none"
-                      stroke="var(--accent)" stroke-width="4" rx="4"/>`;
+        out += `<rect class="mark" x="${x + 1.5}" y="${y + 1.5}" width="97" height="97" fill="none"
+                      stroke="var(--chosen)" stroke-width="3"/>`;
       }
 
       const piece = at.get(square);
       if (piece) {
-        out += `<text class="piece ${piece.colour}" x="${x + 50}" y="${y + 72}"
+        out += `<text class="piece ${piece.colour}" x="${x + 50}" y="${y + 74}"
                       text-anchor="middle">${piece.glyph}</text>`;
+      }
+
+      // Coordinates on the two outer edges only, which is enough to read the board and quiet enough
+      // not to compete with the pieces.
+      if (col === 0) {
+        out += `<text class="coord" x="${x + 7}" y="${y + 21}">${rank}</text>`;
+      }
+      if (row === 7) {
+        out += `<text class="coord" x="${x + 93}" y="${y + 93}" text-anchor="end">${file}</text>`;
       }
     }
   }
+
+  const svg = $('board');
   svg.innerHTML = out;
   svg.querySelectorAll('.sq').forEach(el => el.addEventListener('click', () => clicked(el.dataset.sq)));
 }
@@ -218,13 +299,12 @@ function clicked(square) {
 
   if (selected) {
     const candidates = game.legalMoves.filter(m => m.startsWith(selected + square));
+    selected = null;
     if (candidates.length) {
-      // A promotion is four different moves with the same two squares; ask which piece.
+      // A promotion is four moves sharing two squares, so the piece has to be asked for.
       const move = candidates.length === 1 ? candidates[0] : promotionChoice(candidates);
-      selected = null;
       if (move) { play(move); return; }
     }
-    selected = null;
     draw();
     return;
   }
@@ -241,9 +321,8 @@ function promotionChoice(candidates) {
 }
 
 function say(text, bad) {
-  const el = $('status');
-  el.textContent = text;
-  el.className = bad ? 'status bad' : 'status';
+  $('status').textContent = text;
+  $('status').className = bad ? 'state bad' : 'state';
 }
 
 /** Reads a ProblemDetail body, which is why every failure here can say something specific. */
@@ -252,37 +331,41 @@ async function fail(response) {
   try {
     const problem = await response.json();
     detail = problem.detail || problem.title || detail;
-    if (problem.legalMoves) detail += ` (${problem.legalMoves.length} legal moves)`;
+    if (problem.legalMoves) detail += ` (${problem.legalMoves.length} legal moves here)`;
   } catch { /* not a problem document; the status text will do */ }
-  say(`${response.status}: ${detail}`, true);
+  say(`${response.status} · ${detail}`, true);
 }
+
+const OUTCOME = {
+  WHITE_WON: 'White wins by checkmate.',
+  BLACK_WON: 'Black wins by checkmate.',
+  DRAW_STALEMATE: 'Draw — stalemate.',
+  DRAW_FIFTY_MOVE: 'Draw — fifty-move rule.',
+  DRAW_REPETITION: 'Draw — repetition.',
+  DRAW_INSUFFICIENT_MATERIAL: 'Draw — neither side can mate.',
+  RESIGNED: 'You resigned.'
+};
 
 function render() {
   draw();
-  $('moves').textContent = game && game.moves.length ? game.moves.join(' ') : '–';
+  $('moves').textContent = game && game.moves.length ? game.moves.join(' ') : '—';
 
-  const names = {
-    IN_PROGRESS: game && game.yourTurn ? 'Your move.' : 'Thinking…',
-    WHITE_WON: 'White wins by checkmate.',
-    BLACK_WON: 'Black wins by checkmate.',
-    DRAW_STALEMATE: 'Draw: stalemate.',
-    DRAW_FIFTY_MOVE: 'Draw: fifty-move rule.',
-    DRAW_REPETITION: 'Draw: repetition.',
-    DRAW_INSUFFICIENT_MATERIAL: 'Draw: neither side can mate.',
-    RESIGNED: 'You resigned.'
-  };
-  let text = names[game.status] || game.status;
-  if (game.status === 'IN_PROGRESS' && game.inCheck) text += ' You are in check.';
-  say(text, false);
+  if (game.status === 'IN_PROGRESS') {
+    say(game.yourTurn ? (game.inCheck ? 'Your move — you are in check.' : 'Your move.') : 'Thinking…',
+        false);
+  } else {
+    say(OUTCOME[game.status] || game.status, false);
+  }
 
-  $('resign').disabled = game.status !== 'IN_PROGRESS';
-  $('analyse').disabled = game.status !== 'IN_PROGRESS';
+  const over = game.status !== 'IN_PROGRESS';
+  $('resign').disabled = over;
+  $('analyse').disabled = over;
 }
 
 async function newGame() {
   selected = null;
   $('think').innerHTML = '';
-  ['m-move', 'm-score', 'm-depth', 'm-nodes'].forEach(id => $(id).textContent = '–');
+  ['m-move', 'm-score', 'm-depth', 'm-nodes'].forEach(id => $(id).textContent = '—');
   say('Starting…', false);
 
   const playAsWhite = $('colour').value === 'true';
@@ -301,12 +384,12 @@ async function newGame() {
 
 async function play(move) {
   say('Thinking…', false);
-  render();
+  draw();
 
   const response = await fetch(`/api/games/${game.id}/moves`, {
     method: 'POST',
-    // The version we are looking at. Two fast clicks then produce one move and one 412, rather than
-    // two moves from a position the player never saw.
+    // The version being looked at. Two fast clicks then produce one move and one 412, rather than two
+    // moves from a position the player never saw.
     headers: { 'Content-Type': 'application/json', 'If-Match': `"${game.version}"` },
     body: JSON.stringify({ move })
   });
@@ -315,11 +398,11 @@ async function play(move) {
   const result = await response.json();
   game = result.game;
   if (result.engineMove) {
-    $('m-move').textContent = result.engineMove.move;
-    $('m-score').textContent = (result.engineMove.score > 0 ? '+' : '') +
-      (result.engineMove.score / 100).toFixed(2);
-    $('m-depth').textContent = result.engineMove.depth;
-    $('m-nodes').textContent = result.engineMove.nodes.toLocaleString();
+    const reply = result.engineMove;
+    $('m-move').textContent = reply.move;
+    $('m-score').textContent = (reply.score > 0 ? '+' : '') + (reply.score / 100).toFixed(2);
+    $('m-depth').textContent = reply.depth;
+    $('m-nodes').textContent = reply.nodes.toLocaleString();
   }
   render();
 }
@@ -334,8 +417,8 @@ async function resign() {
 /**
  * Iterative deepening, streamed.
  *
- * Server-sent events rather than polling: the engine finishes depth 1, then 2, and has a complete
- * answer at each step. Watching the line get rewritten as it sees further is the whole point.
+ * Server-sent events rather than polling: the engine finishes depth 1, then 2, and holds a complete
+ * answer at every step. Watching the line get rewritten as it sees further is the whole point.
  */
 function analyse() {
   if (stream) stream.close();
@@ -348,14 +431,14 @@ function analyse() {
     const info = JSON.parse(event.data);
     const score = (info.score > 0 ? '+' : '') + (info.score / 100).toFixed(2);
     const line = document.createElement('div');
-    line.textContent =
-      `d${String(info.depth).padStart(2)}  ${score.padStart(6)}  ` +
-      `${(info.nodesPerSecond / 1000).toFixed(0)}k n/s  ${info.principalVariation.join(' ')}`;
+    line.textContent = `${String(info.depth).padStart(2)}  ${score.padStart(6)}  `
+      + `${(info.nodesPerSecond / 1000).toFixed(0)}k/s  ${info.principalVariation.slice(0, 6).join(' ')}`;
     box.prepend(line);
   });
 
-  stream.addEventListener('best', () => { stream.close(); stream = null; });
-  stream.onerror = () => { if (stream) { stream.close(); stream = null; } };
+  const close = () => { if (stream) { stream.close(); stream = null; } };
+  stream.addEventListener('best', close);
+  stream.onerror = close;
 }
 
 $('new').addEventListener('click', newGame);

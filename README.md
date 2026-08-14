@@ -25,12 +25,13 @@ shaped the way it is.
 
 There is also an HTTP service, so the engine can be played from a web page instead of a chess program:
 
-![The board mid-game, with the engine's reply and its search](docs/screenshot.jpg)
+![Playing a move, and watching the engine search for its reply](docs/play.gif)
 
-The panel on the right is the engine's own reporting: the move it chose, how it scored the position, how
-deep it got and how many positions it looked at. **[Watch it think →](docs/play.gif)** (1.7 MB) shows the
-search streaming in live, one depth at a time.
-
+The column on the right is the engine's own reporting, not decoration: the move it chose, how it scored
+the position, how deep it managed to look and how many positions that took. Underneath, the search streams
+in **as it happens** — iterative deepening means a complete answer at depth 1, then a better one at depth
+2, and watching the line get rewritten as it sees further is the clearest sign that something is being
+searched rather than looked up.
 
 ```bash
 docker compose --profile demo up -d
@@ -45,7 +46,7 @@ To develop against it instead, with the service running from an IDE or the comma
 ```bash
 docker compose up -d                      # Postgres only
 ./mvnw -pl ludus-server -am -DskipTests package
-java -jar ludus-server/target/ludus-server-0.1.0-SNAPSHOT.jar
+java -jar ludus-server/target/ludus-server-0.1.0.jar
 ```
 
 `spring-boot:run` works too, but needs the plugin's full coordinates from the root of a multi-module
@@ -326,8 +327,13 @@ handicap. Some of what the constraint forces:
 
 [`DESIGN.md`](DESIGN.md) is the working design record: the architecture, the measurement strategy, and
 every place the implementation departed from the plan, recorded next to the original reasoning rather
-than edited out. The wrong turns are in there deliberately. A design document that stops tracking
+than edited out. The wrong turns are in there deliberately, including several where a number was quoted
+confidently and turned out to be an artefact of how it was measured. A design document that stops tracking
 reality stops being worth reading.
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is the short version of the rules that record follows: move generation
+stays exact, strength is measured rather than argued, one patch at a time, and `main` is reached through a
+pull request.
 
 ## License
 
