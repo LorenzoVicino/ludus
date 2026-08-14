@@ -1,0 +1,61 @@
+# Deployment for Fly.io. Nothing here is required to build, test or play the engine.
+#
+# Fly rather than a platform-as-a-service with a git hook: this needs a container, a Postgres, and a bound
+# on how much CPU one machine may have, and Fly expresses all three in one file that lives in the
+# repository. The alternative is configuration that exists only in somebody's dashboard.
+#
+#   fly launch --no-deploy        # once, to claim the app name
+#   fly postgres create           # once, then `fly postgres attach <name>`
+#   fly secrets set LUDUS_DB_URL=... LUDUS_DB_USER=... LUDUS_DB_PASSWORD=...
+#   fly deploy
+
+app = "ludus-chess"
+primary_region = "cdg"
+
+[build]
+  dockerfile = "ludus-server/Dockerfile"
+
+[env]
+  # The rate limit is off by default because on a laptop it only obstructs whoever is testing. On the
+  # internet it is the difference between a demo and a free CPU service, so it goes on here.
+  LUDUS_RATE_LIMIT_ENABLED = "true"
+  LUDUS_RATE_LIMIT_READS_PER_MINUTE = "120"
+  LUDUS_RATE_LIMIT_ENGINE_PER_MINUTE = "15"
+
+  # Two engines on a shared CPU. The pool sizes itself from availableProcessors() when left alone, which
+  # is right on a machine and wrong on a fraction of one — see EnginePool.
+  LUDUS_ENGINE_POOL_SIZE = "2"
+  LUDUS_ENGINE_HASH_MEGABYTES = "12"
+
+  # MaxRAM stated rather than inferred. The JVM reads a container's limit only when the kernel reports the
+  # memory controller as enabled, which is not everywhere, and a heap sized from the host is how a
+  # container gets killed by the OOM killer instead of garbage collecting.
+  JAVA_OPTS = "-XX:MaxRAM=512m -XX:MaxRAMPercentage=70 -XX:+UseSerialGC"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # Stopped when nobody is playing, started by the first request. A chess demo is idle almost always, and
+  # the alternative is paying for a machine to wait. The cost is a cold start on the first move, which for
+  # a JVM is seconds — stated here because it is a real trade-off, not a free one.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    # 9090, not 8080: the management endpoints are on their own port so that publishing 8080 does not
+    # publish them. Fly reaches 9090 inside the machine, the internet does not.
+    port = 9090
+    path = "/actuator/health"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "45s"
+
+[[vm]]
+  # A shared CPU is the honest size for this. Search is CPU-bound, so a bigger machine would play better
+  # chess — but two engines on one shared core is enough to answer a person, and the difficulty levels are
+  # capped by time as well as depth precisely so that a slow machine plays a weaker game rather than a
+  # slower one.
+  size = "shared-cpu-2x"
+  memory = "512mb"

@@ -17,6 +17,7 @@ import io.github.lorenzovicino.ludus.server.domain.Game;
 import io.github.lorenzovicino.ludus.server.domain.GameNotFoundException;
 import io.github.lorenzovicino.ludus.server.domain.IllegalMoveException;
 import io.github.lorenzovicino.ludus.server.engine.EngineBusyException;
+import io.github.lorenzovicino.ludus.server.config.RateLimitProperties;
 import io.github.lorenzovicino.ludus.server.engine.EngineService;
 import io.github.lorenzovicino.ludus.server.service.GameService;
 import java.time.Duration;
@@ -26,6 +27,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.MediaType;
@@ -42,8 +44,14 @@ import org.springframework.test.web.servlet.MockMvc;
  *
  * <p>The error cases carry most of the value. A working request is one path; the ways a client can be
  * told "no" are five, and each one is a promise about what that client should do next.
+ *
+ * <p>The rate-limit properties are enabled explicitly because a web slice picks up the filter — it is a
+ * {@code @Component} — but not {@code @ConfigurationPropertiesScan} beans, so without them the context
+ * refuses to start. Enabling them rather than mocking the filter away: it sits in front of every endpoint
+ * asserted below, and a slice that quietly removed it would be testing a stack nobody deploys.
  */
 @WebMvcTest(controllers = GameController.class)
+@EnableConfigurationProperties(RateLimitProperties.class)
 class GameControllerTest {
 
     private static final UUID ID = UUID.fromString("11111111-2222-3333-4444-555555555555");

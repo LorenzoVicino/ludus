@@ -3,6 +3,7 @@ package io.github.lorenzovicino.ludus.server;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * An HTTP service that lets a browser play the engine.
@@ -17,6 +18,8 @@ import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
  */
 @SpringBootApplication
 @ConfigurationPropertiesScan
+// For GameReaper: abandoned games have to be swept, or the table grows for as long as the service is up.
+@EnableScheduling
 public class LudusServerApplication {
 
     public static void main(String[] args) {
