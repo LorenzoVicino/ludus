@@ -21,6 +21,9 @@ bestmove g1f3
 That is the whole interface. The rest of this file explains what is behind it, and why the project is
 shaped the way it is.
 
+**[Download the engine](https://github.com/LorenzoVicino/ludus/releases/latest)** — one jar, no
+dependencies, JDK 24. Or build it from source below.
+
 ## Playing it in a browser
 
 There is also an HTTP service, so the engine can be played from a web page instead of a chess program:
@@ -46,7 +49,7 @@ To develop against it instead, with the service running from an IDE or the comma
 ```bash
 docker compose up -d                      # Postgres only
 ./mvnw -pl ludus-server -am -DskipTests package
-java -jar ludus-server/target/ludus-server-0.1.0.jar
+java -jar ludus-server/target/ludus-server-0.2.0-SNAPSHOT.jar
 ```
 
 `spring-boot:run` works too, but needs the plugin's full coordinates from the root of a multi-module
