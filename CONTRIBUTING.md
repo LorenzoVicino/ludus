@@ -47,9 +47,9 @@ account is in [`DESIGN.md`](DESIGN.md) §9.0.
 
 ## Changes to main go through a pull request
 
-`main` is protected: pushes must arrive as a pull request and CI must be green. Not process for its own
-sake — the history of this repository is meant to be readable as a record of what was measured, and a
-direct push is a claim nobody reviewed.
+`main` is protected: pushes must arrive as a pull request, CI must be green, force pushes and deletions
+are refused. Not process for its own sake — the history of this repository is meant to read as a record of
+what was measured, and a direct push is a claim nobody reviewed.
 
 ```bash
 git switch -c short-description-of-the-change
@@ -57,6 +57,19 @@ git switch -c short-description-of-the-change
 git push -u origin short-description-of-the-change
 gh pr create
 ```
+
+**Including for the owner.** The ruleset has no bypass actors, so a direct `git push` to `main` is
+rejected for everybody. A bypass that gets used every day is not a policy, it is a comment.
+
+Two consequences worth knowing rather than discovering. Approvals are set to **zero**, so a solo change
+still merges — the requirement is the pull request and the green check, not somebody else's time. And the
+only escape hatch is *administering* the rule rather than stepping around it: if CI is broken and something
+has to land, the ruleset gets edited deliberately and visibly, which is the correct amount of friction for
+that decision.
+
+This is also why the status-page workflow no longer commits anything: it was the one writer that could not
+open a pull request, and a personal repository cannot grant a ruleset bypass to GitHub Actions. It now
+publishes to Pages instead, which it was already doing.
 
 ## What a good commit message looks like here
 
