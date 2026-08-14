@@ -31,6 +31,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -45,13 +46,16 @@ import org.springframework.test.web.servlet.MockMvc;
  * <p>The error cases carry most of the value. A working request is one path; the ways a client can be
  * told "no" are five, and each one is a promise about what that client should do next.
  *
- * <p>The rate-limit properties are enabled explicitly because a web slice picks up the filter — it is a
- * {@code @Component} — but not {@code @ConfigurationPropertiesScan} beans, so without them the context
- * refuses to start. Enabling them rather than mocking the filter away: it sits in front of every endpoint
- * asserted below, and a slice that quietly removed it would be testing a stack nobody deploys.
+ * <p>Two things about the rate-limit filter. Its properties have to be enabled explicitly, because a web
+ * slice picks up the filter — it is a {@code @Component} — but not {@code @ConfigurationPropertiesScan}
+ * beans, and without them the context refuses to start. And the limit itself is switched off, because these
+ * tests fire a burst of requests from one address, which is precisely what it exists to refuse; left on, a
+ * new test would eventually fail with a 429 that says nothing about status codes. {@code RateLimitFilterTest}
+ * covers the filter.
  */
 @WebMvcTest(controllers = GameController.class)
 @EnableConfigurationProperties(RateLimitProperties.class)
+@TestPropertySource(properties = "ludus.rate-limit.enabled=false")
 class GameControllerTest {
 
     private static final UUID ID = UUID.fromString("11111111-2222-3333-4444-555555555555");
