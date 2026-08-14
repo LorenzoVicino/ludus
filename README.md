@@ -25,6 +25,13 @@ shaped the way it is.
 
 There is also an HTTP service, so the engine can be played from a web page instead of a chess program:
 
+![The board mid-game, with the engine's reply and its search](docs/screenshot.jpg)
+
+The panel on the right is the engine's own reporting: the move it chose, how it scored the position, how
+deep it got and how many positions it looked at. **[Watch it think →](docs/play.gif)** (1.7 MB) shows the
+search streaming in live, one depth at a time.
+
+
 ```bash
 docker compose --profile demo up -d
 ```

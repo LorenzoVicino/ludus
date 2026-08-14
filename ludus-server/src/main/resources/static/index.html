@@ -43,7 +43,13 @@
   .board-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
   svg { width: 100%; height: auto; display: block; border-radius: 6px; }
   .sq { cursor: pointer; }
-  .piece { font-size: 62px; pointer-events: none; user-select: none; }
+  /*
+    Everything drawn on top of a square has to be transparent to clicks. The legal-move dots sit
+    exactly where you are about to click, so without this the indicator swallows the click meant for
+    the square underneath it and nothing happens at all - which is a bug you cannot see, only feel.
+  */
+  .hint, .piece { pointer-events: none; }
+  .piece { font-size: 62px; user-select: none; }
   .piece.w { fill: #fff; stroke: #333; stroke-width: 1.1px; paint-order: stroke; }
   .piece.b { fill: #2b2b2b; stroke: #ddd; stroke-width: 1.1px; paint-order: stroke; }
 
@@ -188,11 +194,11 @@ function draw() {
       if (selected && game && game.legalMoves.some(m => m.startsWith(selected + square))) {
         const target = at.get(square);
         out += target
-          ? `<circle cx="${x + 50}" cy="${y + 50}" r="44" fill="none" stroke="var(--legal)" stroke-width="7"/>`
-          : `<circle cx="${x + 50}" cy="${y + 50}" r="15" fill="var(--legal)"/>`;
+          ? `<circle class="hint" cx="${x + 50}" cy="${y + 50}" r="44" fill="none" stroke="var(--legal)" stroke-width="7"/>`
+          : `<circle class="hint" cx="${x + 50}" cy="${y + 50}" r="15" fill="var(--legal)"/>`;
       }
       if (selected === square) {
-        out += `<rect x="${x + 2}" y="${y + 2}" width="96" height="96" fill="none"
+        out += `<rect class="hint" x="${x + 2}" y="${y + 2}" width="96" height="96" fill="none"
                       stroke="var(--accent)" stroke-width="4" rx="4"/>`;
       }
 
