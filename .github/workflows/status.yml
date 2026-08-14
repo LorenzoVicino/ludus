@@ -20,9 +20,8 @@ jobs:
   generate:
     name: Generate
     runs-on: ubuntu-latest
-    permissions:
-      # Only to commit the regenerated profile cards back to the repository.
-      contents: write
+    # No `contents: write`. Nothing is written back to the repository any more — see the note under the
+    # upload step — so this job reads and publishes and can do nothing else.
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -55,16 +54,17 @@ jobs:
         with:
           path: docs
 
-      # The page itself is served from the artifact above and is not committed. The SVG cards are,
-      # because a profile README in another repository has to reference them by URL. They only change
-      # when a number changes, so this produces no nightly churn.
-      - name: Commit the cards if they changed
-        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7
-        with:
-          file_pattern: docs/card-light.svg docs/card-dark.svg
-          commit_message: "Update status cards [skip ci]"
-          commit_user_name: github-actions[bot]
-          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
+      # Nothing is committed back. The cards used to be, on the reasoning that a profile README in
+      # another repository needs to reference them by URL — but the upload above publishes the whole
+      # `docs` directory to Pages, so they already have one:
+      #
+      #   https://lorenzovicino.github.io/ludus/card-dark.svg
+      #   https://lorenzovicino.github.io/ludus/card-light.svg
+      #
+      # Dropping the commit is worth three things. `main` can be protected, because the only writer
+      # that could not go through a pull request was this workflow. The history stops carrying bot
+      # commits, which matters in a repository whose history is meant to read as a record of what was
+      # measured. And this job no longer needs write access to the repository at all.
 
   deploy:
     name: Deploy
