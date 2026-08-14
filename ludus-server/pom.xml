@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.github.lorenzovicino</groupId>
+    <artifactId>ludus</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>ludus-server</artifactId>
+  <name>ludus-server</name>
+  <description>
+    An HTTP service that lets a browser play the engine. Depends on the engine the way ludus-tools
+    does — the engine has no idea it is on a network, and nothing here can reach back into it.
+  </description>
+
+  <properties>
+    <spring-boot.version>3.5.0</spring-boot.version>
+    <springdoc.version>2.8.6</springdoc.version>
+    <testcontainers.version>1.20.6</testcontainers.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!--
+        Imported here rather than in the parent so the framework's transitive tree stops at this
+        module. This also wins over the parent's JUnit pin for this module only, which is what we
+        want: Boot's test slices are tested against the JUnit version Boot manages.
+      -->
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${spring-boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.testcontainers</groupId>
+        <artifactId>testcontainers-bom</artifactId>
+        <version>${testcontainers.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-eval</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-search</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.github.lorenzovicino</groupId>
+      <artifactId>ludus-nnue</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-actuator</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.micrometer</groupId>
+      <artifactId>micrometer-registry-prometheus</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-database-postgresql</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springdoc</groupId>
+      <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+      <version>${springdoc.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-test</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!--
+      Gives @ServiceConnection, which points the datasource at the container without a
+      @DynamicPropertySource block repeating the url, user and password by hand.
+    -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-testcontainers</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.testcontainers</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        Spring needs parameter names at runtime to bind @PathVariable, @RequestParam and constructor
+        arguments, and javac discards them unless asked. spring-boot-starter-parent turns this on for
+        you; this project has its own parent, so it has to be said here.
+
+        Without it every request carrying a path variable fails with 400 and nothing in the message
+        mentions parameter names — the binding simply has no name to match, so the argument is treated
+        as missing. Worth the comment: it is invisible, it looks like a validation bug, and it only
+        appears in modules that use a framework which reflects over signatures.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <parameters>true</parameters>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <mainClass>io.github.lorenzovicino.ludus.server.LudusServerApplication</mainClass>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

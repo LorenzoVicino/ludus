@@ -1,0 +1,361 @@
+<!doctype html>
+<!--
+  One file, no build step, no dependencies.
+
+  Not a stylistic preference: this page is served by the same jar as the API, and a page that needs npm
+  to exist would mean the service could not be run with one command. The board is inline SVG and the
+  pieces are Unicode, so there is nothing to fetch and nothing to go stale.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ludus</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel: #1c2028;
+    --line: #2a2f3a;
+    --text: #e6e8ec;
+    --dim: #8b93a3;
+    --light: #ebecd0;
+    --dark: #6f8f5a;
+    --from: #f6d76b;
+    --to: #f0c94a;
+    --legal: rgba(20, 23, 28, .28);
+    --accent: #7aa2f7;
+    --bad: #e06c75;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+  }
+  .app { width: 100%; max-width: 980px; }
+  h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: -.01em; }
+  .sub { color: var(--dim); font-size: 13px; margin-bottom: 20px; }
+  .sub a { color: var(--accent); }
+  .layout { display: grid; grid-template-columns: minmax(280px, 1fr) 320px; gap: 20px; align-items: start; }
+  @media (max-width: 820px) { .layout { grid-template-columns: 1fr; } }
+
+  .board-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+  svg { width: 100%; height: auto; display: block; border-radius: 6px; }
+  .sq { cursor: pointer; }
+  .piece { font-size: 62px; pointer-events: none; user-select: none; }
+  .piece.w { fill: #fff; stroke: #333; stroke-width: 1.1px; paint-order: stroke; }
+  .piece.b { fill: #2b2b2b; stroke: #ddd; stroke-width: 1.1px; paint-order: stroke; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .panel + .panel { margin-top: 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim);
+              margin: 0 0 12px; font-weight: 600; }
+  label { display: block; font-size: 13px; color: var(--dim); margin: 10px 0 4px; }
+  select, button {
+    width: 100%; padding: 9px 11px; border-radius: 8px; font: inherit;
+    background: #232833; color: var(--text); border: 1px solid var(--line);
+  }
+  button { cursor: pointer; font-weight: 600; }
+  button.primary { background: var(--accent); color: #10131a; border-color: transparent; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; margin-top: 12px; }
+
+  .status { font-size: 14px; min-height: 22px; }
+  .status.bad { color: var(--bad); }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+  dt { color: var(--dim); }
+  dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .moves { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+           color: var(--dim); max-height: 120px; overflow-y: auto; word-break: break-all; }
+  .think { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11.5px;
+           max-height: 150px; overflow-y: auto; }
+  .think div { padding: 1px 0; color: var(--dim); }
+  .think div:first-child { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>ludus</h1>
+  <p class="sub">
+    A chess engine written from scratch in Java. Click a piece, then a square.
+    <a href="/swagger-ui.html">API</a> · <a href="https://github.com/LorenzoVicino/ludus">source</a>
+  </p>
+
+  <div class="layout">
+    <div class="board-wrap">
+      <svg id="board" viewBox="0 0 800 800" role="img" aria-label="Chess board"></svg>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>Game</h2>
+        <label for="level">Strength</label>
+        <select id="level">
+          <option value="BEGINNER">Beginner</option>
+          <option value="CASUAL">Casual</option>
+          <option value="CLUB" selected>Club</option>
+          <option value="STRONG">Strong</option>
+          <option value="MAXIMUM">Maximum</option>
+        </select>
+        <label for="colour">You play</label>
+        <select id="colour">
+          <option value="true" selected>White</option>
+          <option value="false">Black</option>
+        </select>
+        <div class="row">
+          <button class="primary" id="new">New game</button>
+          <button id="resign">Resign</button>
+        </div>
+        <p class="status" id="status" style="margin:12px 0 0">Start a game.</p>
+      </div>
+
+      <div class="panel">
+        <h2>Last reply</h2>
+        <dl>
+          <dt>Move</dt><dd id="m-move">–</dd>
+          <dt>Evaluation</dt><dd id="m-score">–</dd>
+          <dt>Depth</dt><dd id="m-depth">–</dd>
+          <dt>Nodes</dt><dd id="m-nodes">–</dd>
+        </dl>
+      </div>
+
+      <div class="panel">
+        <h2>Thinking</h2>
+        <button id="analyse">Show me what it sees</button>
+        <div class="think" id="think" style="margin-top:10px"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Moves</h2>
+        <div class="moves" id="moves">–</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+const GLYPH = { P:'♙', N:'♘', B:'♗', R:'♖', Q:'♕', K:'♔' };
+const FILES = 'abcdefgh';
+
+let game = null;
+let selected = null;
+let flipped = false;
+let stream = null;
+
+const $ = id => document.getElementById(id);
+
+/** The board is drawn from the FEN, so the server's position is the only position. */
+function draw() {
+  const svg = $('board');
+  const placement = game ? game.fen.split(' ')[0] : 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  const rows = placement.split('/');
+  const last = game && game.moves.length ? game.moves[game.moves.length - 1] : null;
+  const parts = [];
+
+  for (let rank = 0; rank < 8; rank++) {
+    let file = 0;
+    for (const ch of rows[rank]) {
+      if (ch >= '1' && ch <= '8') { file += +ch; continue; }
+      const square = FILES[file] + (8 - rank);
+      const piece = { square, glyph: GLYPH[ch.toUpperCase()], colour: ch === ch.toUpperCase() ? 'w' : 'b' };
+      parts.push(piece);
+      file++;
+    }
+  }
+
+  const at = new Map(parts.map(p => [p.square, p]));
+  let out = '';
+
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const rank = flipped ? row + 1 : 8 - row;
+      const file = flipped ? FILES[7 - col] : FILES[col];
+      const square = file + rank;
+      const x = col * 100, y = row * 100;
+      const shade = (row + col) % 2 === 0 ? 'var(--light)' : 'var(--dark)';
+
+      let fill = shade;
+      if (last && square === last.slice(0, 2)) fill = 'var(--from)';
+      else if (last && square === last.slice(2, 4)) fill = 'var(--to)';
+
+      out += `<rect class="sq" data-sq="${square}" x="${x}" y="${y}" width="100" height="100" fill="${fill}"/>`;
+
+      // A dot on every square this piece may go to. The server sent the legal moves with the position,
+      // so the browser never has to guess and never has to ask.
+      if (selected && game && game.legalMoves.some(m => m.startsWith(selected + square))) {
+        const target = at.get(square);
+        out += target
+          ? `<circle cx="${x + 50}" cy="${y + 50}" r="44" fill="none" stroke="var(--legal)" stroke-width="7"/>`
+          : `<circle cx="${x + 50}" cy="${y + 50}" r="15" fill="var(--legal)"/>`;
+      }
+      if (selected === square) {
+        out += `<rect x="${x + 2}" y="${y + 2}" width="96" height="96" fill="none"
+                      stroke="var(--accent)" stroke-width="4" rx="4"/>`;
+      }
+
+      const piece = at.get(square);
+      if (piece) {
+        out += `<text class="piece ${piece.colour}" x="${x + 50}" y="${y + 72}"
+                      text-anchor="middle">${piece.glyph}</text>`;
+      }
+    }
+  }
+  svg.innerHTML = out;
+  svg.querySelectorAll('.sq').forEach(el => el.addEventListener('click', () => clicked(el.dataset.sq)));
+}
+
+function clicked(square) {
+  if (!game || !game.yourTurn) return;
+
+  if (selected) {
+    const candidates = game.legalMoves.filter(m => m.startsWith(selected + square));
+    if (candidates.length) {
+      // A promotion is four different moves with the same two squares; ask which piece.
+      const move = candidates.length === 1 ? candidates[0] : promotionChoice(candidates);
+      selected = null;
+      if (move) { play(move); return; }
+    }
+    selected = null;
+    draw();
+    return;
+  }
+
+  if (game.legalMoves.some(m => m.startsWith(square))) {
+    selected = square;
+    draw();
+  }
+}
+
+function promotionChoice(candidates) {
+  const answer = (prompt('Promote to? q, r, b or n', 'q') || '').trim().toLowerCase();
+  return candidates.find(m => m.endsWith(answer)) || candidates.find(m => m.endsWith('q'));
+}
+
+function say(text, bad) {
+  const el = $('status');
+  el.textContent = text;
+  el.className = bad ? 'status bad' : 'status';
+}
+
+/** Reads a ProblemDetail body, which is why every failure here can say something specific. */
+async function fail(response) {
+  let detail = response.statusText;
+  try {
+    const problem = await response.json();
+    detail = problem.detail || problem.title || detail;
+    if (problem.legalMoves) detail += ` (${problem.legalMoves.length} legal moves)`;
+  } catch { /* not a problem document; the status text will do */ }
+  say(`${response.status}: ${detail}`, true);
+}
+
+function render() {
+  draw();
+  $('moves').textContent = game && game.moves.length ? game.moves.join(' ') : '–';
+
+  const names = {
+    IN_PROGRESS: game && game.yourTurn ? 'Your move.' : 'Thinking…',
+    WHITE_WON: 'White wins by checkmate.',
+    BLACK_WON: 'Black wins by checkmate.',
+    DRAW_STALEMATE: 'Draw: stalemate.',
+    DRAW_FIFTY_MOVE: 'Draw: fifty-move rule.',
+    DRAW_REPETITION: 'Draw: repetition.',
+    DRAW_INSUFFICIENT_MATERIAL: 'Draw: neither side can mate.',
+    RESIGNED: 'You resigned.'
+  };
+  let text = names[game.status] || game.status;
+  if (game.status === 'IN_PROGRESS' && game.inCheck) text += ' You are in check.';
+  say(text, false);
+
+  $('resign').disabled = game.status !== 'IN_PROGRESS';
+  $('analyse').disabled = game.status !== 'IN_PROGRESS';
+}
+
+async function newGame() {
+  selected = null;
+  $('think').innerHTML = '';
+  ['m-move', 'm-score', 'm-depth', 'm-nodes'].forEach(id => $(id).textContent = '–');
+  say('Starting…', false);
+
+  const playAsWhite = $('colour').value === 'true';
+  flipped = !playAsWhite;
+
+  const response = await fetch('/api/games', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ difficulty: $('level').value, playAsWhite })
+  });
+  if (!response.ok) return fail(response);
+
+  game = await response.json();
+  render();
+}
+
+async function play(move) {
+  say('Thinking…', false);
+  render();
+
+  const response = await fetch(`/api/games/${game.id}/moves`, {
+    method: 'POST',
+    // The version we are looking at. Two fast clicks then produce one move and one 412, rather than
+    // two moves from a position the player never saw.
+    headers: { 'Content-Type': 'application/json', 'If-Match': `"${game.version}"` },
+    body: JSON.stringify({ move })
+  });
+  if (!response.ok) return fail(response);
+
+  const result = await response.json();
+  game = result.game;
+  if (result.engineMove) {
+    $('m-move').textContent = result.engineMove.move;
+    $('m-score').textContent = (result.engineMove.score > 0 ? '+' : '') +
+      (result.engineMove.score / 100).toFixed(2);
+    $('m-depth').textContent = result.engineMove.depth;
+    $('m-nodes').textContent = result.engineMove.nodes.toLocaleString();
+  }
+  render();
+}
+
+async function resign() {
+  const response = await fetch(`/api/games/${game.id}`, { method: 'DELETE' });
+  if (!response.ok) return fail(response);
+  game = await response.json();
+  render();
+}
+
+/**
+ * Iterative deepening, streamed.
+ *
+ * Server-sent events rather than polling: the engine finishes depth 1, then 2, and has a complete
+ * answer at each step. Watching the line get rewritten as it sees further is the whole point.
+ */
+function analyse() {
+  if (stream) stream.close();
+  const box = $('think');
+  box.innerHTML = '';
+
+  stream = new EventSource(`/api/games/${game.id}/analysis?depth=12`);
+
+  stream.addEventListener('iteration', event => {
+    const info = JSON.parse(event.data);
+    const score = (info.score > 0 ? '+' : '') + (info.score / 100).toFixed(2);
+    const line = document.createElement('div');
+    line.textContent =
+      `d${String(info.depth).padStart(2)}  ${score.padStart(6)}  ` +
+      `${(info.nodesPerSecond / 1000).toFixed(0)}k n/s  ${info.principalVariation.join(' ')}`;
+    box.prepend(line);
+  });
+
+  stream.addEventListener('best', () => { stream.close(); stream = null; });
+  stream.onerror = () => { if (stream) { stream.close(); stream = null; } };
+}
+
+$('new').addEventListener('click', newGame);
+$('resign').addEventListener('click', resign);
+$('analyse').addEventListener('click', analyse);
+draw();
+</script>
+</body>
+</html>

@@ -21,6 +21,30 @@ bestmove g1f3
 That is the whole interface. The rest of this file explains what is behind it, and why the project is
 shaped the way it is.
 
+## Playing it in a browser
+
+There is also an HTTP service, so the engine can be played from a web page instead of a chess program:
+
+```bash
+docker compose up -d postgres
+./mvnw -pl ludus-server -am spring-boot:run
+```
+
+Then open **http://localhost:8080** for the board, or **/swagger-ui.html** for the API.
+
+```
+POST   /api/games                 start one; 201 with its location
+GET    /api/games/{id}            the position, and every move legal right now
+POST   /api/games/{id}/moves      your move; the engine's reply comes back with it
+GET    /api/games/{id}/analysis   server-sent events: the search, as it thinks
+DELETE /api/games/{id}            resign
+```
+
+The service is a separate module that depends on the engine **the way the tooling does**. Nothing under
+`ludus-core` or `ludus-search` knows a web server exists, the module graph makes referring to it from
+there a compile error, and Spring's dependency tree is imported in that module's POM rather than the
+parent's — so the jar a chess GUI launches still has no third-party dependencies at all.
+
 ---
 
 ## What a chess engine actually does
@@ -222,6 +246,40 @@ A workflow also publishes a page with the current measurements, at
 than by hand.
 
 ---
+
+## The decisions in the web service
+
+A chess engine turns out to be an awkward thing to put behind HTTP, in ways that make the service more
+interesting than a CRUD API. Four of them:
+
+**A search is stateful, single-threaded, and expensive to create.** It owns a transposition table, killer
+tables, history counters and preallocated move lists for every ply — megabytes of arrays that exist so
+the search never allocates while running. Two requests sharing one instance would corrupt each other's
+tables and return legal-looking wrong moves; building one per request would throw all that away between
+moves. So there is a **fixed pool**, borrowed and returned, sized to *cores minus one* because search is
+CPU-bound and a saturated machine makes even the cheap requests slow. A request that cannot get an engine
+inside its timeout is refused with **503 and a `Retry-After`**, rather than queued behind clients who
+have already left.
+
+**A search takes seconds, and a database transaction must not.** So the sequence is: read the game,
+validate the move in memory, *let go of the connection*, search, then write once. Correctness across that
+gap comes from an optimistic-locking version column rather than a lock — if another request moved
+meanwhile, the write fails and the answer is **409**, because the move was computed for a position that no
+longer exists. Holding a pooled connection while a core grinds through a search tree would exhaust the
+connection pool before the engine pool, which looks like a database problem and is not one.
+
+**Games are stored as their moves, not their position.** A draw by repetition needs to know which
+positions have occurred and the fifty-move counter needs the history that produced it; a stored FEN has
+forgotten both. Replaying costs microseconds and is the only version that gets the rules right.
+
+**The engine was already streaming.** It has had a `SearchListener` since the first milestone, to emit the
+`info` lines UCI requires. The server-sent-events endpoint subscribes to that same callback and forwards
+it — no engine code changed to make watching the search possible, which is the practical payoff of having
+cut the interface early rather than when it became useful.
+
+Errors are all [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem documents, and they try to say
+what *would* have worked: an illegal move comes back **422** with the legal moves attached, because the
+server generated them in order to decide and throwing them away would only make the client guess.
 
 ## Why Java
 

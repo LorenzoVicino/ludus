@@ -1,0 +1,72 @@
+spring:
+  application:
+    name: ludus-server
+
+  datasource:
+    url: ${LUDUS_DB_URL:jdbc:postgresql://localhost:5432/ludus}
+    username: ${LUDUS_DB_USER:ludus}
+    password: ${LUDUS_DB_PASSWORD:ludus}
+    hikari:
+      # Deliberately small. Connections are held for one statement at a time here - the search happens
+      # outside any transaction - so a large pool would reserve memory in Postgres to no purpose.
+      maximum-pool-size: 10
+      pool-name: ludus-cp
+
+  jpa:
+    # Flyway owns the schema. Letting Hibernate generate it as well means two descriptions of the same
+    # tables, and the one that is not in version control always wins by accident.
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  threads:
+    virtual:
+      # Request handling is fine on virtual threads. The searches are not on them - they run on the
+      # bounded analysis executor - because a virtual thread pinned to a core for two seconds of
+      # arithmetic gains nothing and hides the bound that matters.
+      enabled: true
+
+ludus:
+  engine:
+    # Zero means "cores minus one", decided at startup. See EnginePool for why that is the number.
+    pool-size: 0
+    hash-megabytes: 16
+    borrow-timeout: 10s
+    # Empty is the hand-written evaluation. Point it at a .nnue file to serve the network instead - the
+    # same choice the UCI EvalFile option makes.
+    eval-file: ""
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      application: ludus
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+server:
+  error:
+    # Errors are ProblemDetail from the handler; the servlet container's own page never applies.
+    whitelabel:
+      enabled: false
+  shutdown: graceful
+
+logging:
+  level:
+    io.github.lorenzovicino.ludus: INFO

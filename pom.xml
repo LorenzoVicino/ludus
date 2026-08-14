@@ -44,7 +44,16 @@
     <module>ludus-nnue</module>
     <module>ludus-uci</module>
     <module>ludus-tools</module>
+    <module>ludus-server</module>
   </modules>
+
+  <!--
+    Spring Boot's BOM is imported inside ludus-server rather than here, deliberately. The engine
+    modules must not inherit a web framework's dependency tree: the jar a GUI launches has no
+    dependencies, and that property is easier to keep when the framework cannot reach the modules
+    that ship. It also keeps the JUnit version this project pins from being overridden for the
+    engine while ludus-server uses whichever version Boot tested against.
+  -->
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>

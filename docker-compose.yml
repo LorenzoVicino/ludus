@@ -5,6 +5,25 @@
 # which matters because a single SPRT match is 300 to 500 games and the wall time of one is the
 # bottleneck on how fast patches can be evaluated.
 services:
+  # Where ludus-server keeps games. Also development-only: the engine itself stores nothing.
+  postgres:
+    image: postgres:17-alpine
+    container_name: ludus-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ludus
+      POSTGRES_USER: ludus
+      POSTGRES_PASSWORD: ludus
+    volumes:
+      - ludus-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The service connects and runs migrations on startup, so "container running" is not "ready".
+      test: ["CMD-SHELL", "pg_isready -U ludus -d ludus"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   rabbitmq:
     image: rabbitmq:4-management
     container_name: ludus-rabbitmq
@@ -21,3 +40,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+
+volumes:
+  ludus-pgdata:
