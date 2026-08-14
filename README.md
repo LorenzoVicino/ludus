@@ -67,6 +67,17 @@ GET    /api/games/{id}/analysis   server-sent events: the search, as it thinks
 DELETE /api/games/{id}            resign
 ```
 
+A game is a URL — `/?game=<id>` — so one can be shared, bookmarked or reloaded, and what the engine thought
+about its last move comes back with it rather than being lost on refresh.
+
+That is also why the animation above can be regenerated rather than re-recorded by hand: the script plays a
+game through the API and photographs the page after each move, so the README stops going stale the moment
+the design changes.
+
+```bash
+pwsh tools/capture-readme-gif.ps1
+```
+
 The service is a separate module that depends on the engine **the way the tooling does**. Nothing under
 `ludus-core` or `ludus-search` knows a web server exists, the module graph makes referring to it from
 there a compile error, and Spring's dependency tree is imported in that module's POM rather than the

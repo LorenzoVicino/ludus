@@ -64,6 +64,28 @@ public class Game {
     @Column(name = "human_is_white", nullable = false)
     private boolean humanIsWhite = true;
 
+    /**
+     * What the engine thought about the move it last played, or null before it has played one.
+     *
+     * <p>Kept because a game is reachable by URL. Without it, reloading a game — or opening somebody's
+     * link — leaves the panel that exists to show the engine's reasoning showing nothing, and the
+     * information was already computed and thrown away.
+     *
+     * <p>Nullable rather than zero: "it has not answered yet" and "it answered nought centipawns" are
+     * different facts, and nought is an ordinary score.
+     */
+    @Column(name = "last_move", length = 6)
+    private String lastMove;
+
+    @Column(name = "last_score")
+    private Integer lastScore;
+
+    @Column(name = "last_depth")
+    private Integer lastDepth;
+
+    @Column(name = "last_nodes")
+    private Long lastNodes;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -118,6 +140,30 @@ public class Game {
         this.fen = board().toFen();
         this.status = newStatus;
         this.updatedAt = now;
+    }
+
+    /** Records what the engine thought about the move it just appended. */
+    public void rememberReply(String move, int score, int depth, long nodes) {
+        this.lastMove = move;
+        this.lastScore = score;
+        this.lastDepth = depth;
+        this.lastNodes = nodes;
+    }
+
+    public String lastMove() {
+        return lastMove;
+    }
+
+    public Integer lastScore() {
+        return lastScore;
+    }
+
+    public Integer lastDepth() {
+        return lastDepth;
+    }
+
+    public Long lastNodes() {
+        return lastNodes;
     }
 
     public void resign(Instant now) {

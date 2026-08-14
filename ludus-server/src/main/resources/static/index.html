@@ -146,7 +146,11 @@
   .stream { max-height: 150px; overflow-y: auto; margin-top: 12px; }
   .stream div { color: var(--muted); white-space: nowrap; }
   .stream div:first-child { color: var(--ink); }
-  .history { color: var(--muted); word-break: break-all; max-height: 92px; overflow-y: auto; }
+  /*
+    Wrapping happens between moves, never inside one. `break-all` split "d7d5" across two lines, which
+    reads as two different moves — the list is already space-separated, so the default is what was wanted.
+  */
+  .history { color: var(--muted); max-height: 92px; overflow-y: auto; }
 </style>
 </head>
 <body>
@@ -365,7 +369,7 @@ function render() {
 async function newGame() {
   selected = null;
   $('think').innerHTML = '';
-  ['m-move', 'm-score', 'm-depth', 'm-nodes'].forEach(id => $(id).textContent = '—');
+  showReply(null);
   say('Starting…', false);
 
   const playAsWhite = $('colour').value === 'true';
@@ -379,7 +383,46 @@ async function newGame() {
   if (!response.ok) return fail(response);
 
   game = await response.json();
+  // The engine may already have moved, if it has white.
+  showReply(game.lastReply);
+  remember();
   render();
+}
+
+/**
+ * Puts the game's id in the address bar, so the URL identifies the game rather than the application.
+ *
+ * <p>`replaceState` rather than `pushState`: a game is one thing that changes, not a series of pages, and
+ * filling the back button with every move would make Back mean something nobody intends.
+ */
+function remember() {
+  history.replaceState(null, '', `?game=${game.id}`);
+}
+
+/** Opens a game that already exists — a shared link, a reload, or a capture script. */
+async function resume(id) {
+  say('Loading…', false);
+  const response = await fetch(`/api/games/${id}`);
+  if (!response.ok) return fail(response);
+
+  game = await response.json();
+  flipped = !game.youAreWhite;
+  $('level').value = game.difficulty;
+  $('colour').value = String(game.youAreWhite);
+  showReply(game.lastReply);
+  render();
+}
+
+/** Fills the panel that says what the engine thought, or empties it. */
+function showReply(reply) {
+  if (!reply) {
+    ['m-move', 'm-score', 'm-depth', 'm-nodes'].forEach(id => $(id).textContent = '—');
+    return;
+  }
+  $('m-move').textContent = reply.move;
+  $('m-score').textContent = (reply.score > 0 ? '+' : '') + (reply.score / 100).toFixed(2);
+  $('m-depth').textContent = reply.depth;
+  $('m-nodes').textContent = reply.nodes.toLocaleString();
 }
 
 async function play(move) {
@@ -398,11 +441,7 @@ async function play(move) {
   const result = await response.json();
   game = result.game;
   if (result.engineMove) {
-    const reply = result.engineMove;
-    $('m-move').textContent = reply.move;
-    $('m-score').textContent = (reply.score > 0 ? '+' : '') + (reply.score / 100).toFixed(2);
-    $('m-depth').textContent = reply.depth;
-    $('m-nodes').textContent = reply.nodes.toLocaleString();
+    showReply(result.engineMove);
   }
   render();
 }
@@ -444,7 +483,13 @@ function analyse() {
 $('new').addEventListener('click', newGame);
 $('resign').addEventListener('click', resign);
 $('analyse').addEventListener('click', analyse);
-draw();
+
+const requested = new URLSearchParams(location.search).get('game');
+if (requested) {
+  resume(requested);
+} else {
+  draw();
+}
 </script>
 </body>
 </html>

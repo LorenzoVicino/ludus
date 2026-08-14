@@ -110,6 +110,7 @@ public class GameService {
 
         board.makeMove(MoveCodec.parse(board, reply.move()));
         game.append(reply.move(), Rules.statusOf(board), clock.instant());
+        game.rememberReply(reply.move(), reply.score(), reply.depth(), reply.nodes());
         return new PlayResult(save(game), reply);
     }
 
@@ -129,6 +130,7 @@ public class GameService {
         }
         board.makeMove(MoveCodec.parse(board, first.move()));
         game.append(first.move(), Rules.statusOf(board), clock.instant());
+        game.rememberReply(first.move(), first.score(), first.depth(), first.nodes());
         return save(game);
     }
 
