@@ -26,16 +26,23 @@ shaped the way it is.
 There is also an HTTP service, so the engine can be played from a web page instead of a chess program:
 
 ```bash
-docker compose up -d postgres
+docker compose --profile demo up -d
+```
+
+That is the whole thing — it builds the service from source, starts Postgres, runs the migrations and
+waits for the database to be ready first. Then open **http://localhost:8080** for the board, or
+**/swagger-ui.html** for the API. `docker compose --profile demo down` when you are done.
+
+To develop against it instead, with the service running from an IDE or the command line:
+
+```bash
+docker compose up -d                      # Postgres only
 ./mvnw -pl ludus-server -am -DskipTests package
 java -jar ludus-server/target/ludus-server-0.1.0-SNAPSHOT.jar
 ```
 
-Then open **http://localhost:8080** for the board, or **/swagger-ui.html** for the API.
-
-For the usual development loop, `spring-boot:run` needs its full coordinates from the root of a
-multi-module build — the short `spring-boot:run` prefix is resolved against the top-level project, which
-does not declare the plugin:
+`spring-boot:run` works too, but needs the plugin's full coordinates from the root of a multi-module
+build — the short prefix is resolved against the top-level project, which does not declare it:
 
 ```bash
 ./mvnw -pl ludus-server -am org.springframework.boot:spring-boot-maven-plugin:run
@@ -228,7 +235,7 @@ java -jar ludus-tools/target/ludus-match.jar collect --local \
     --samples 700000 --depth 10 --endgame-fraction 0.35 --out build/selfplay.txt
 
 # or spread generation and matches over several machines, with RabbitMQ between them
-docker compose up -d
+docker compose --profile tooling up -d
 java -jar ludus-tools/target/ludus-match.jar collect --samples 2000000
 java -jar ludus-tools/target/ludus-match.jar generate --concurrency 6   # on each machine
 

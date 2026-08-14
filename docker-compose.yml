@@ -5,6 +5,55 @@
 # which matters because a single SPRT match is 300 to 500 games and the wall time of one is the
 # bottleneck on how fast patches can be evaluated.
 services:
+  # The HTTP service, so `docker compose up` is the whole demo: board on http://localhost:8080,
+  # API documentation on /swagger-ui.html.
+  #
+  # Under the `demo` profile, so the default `docker compose up -d` still starts only the
+  # infrastructure — which is what somebody developing wants, with the service running from an IDE.
+  server:
+    profiles: ["demo"]
+    build:
+      context: .
+      dockerfile: ludus-server/Dockerfile
+    container_name: ludus-server
+    ports:
+      - "8080:8080"
+    environment:
+      LUDUS_DB_URL: jdbc:postgresql://postgres:5432/ludus
+      LUDUS_DB_USER: ludus
+      LUDUS_DB_PASSWORD: ludus
+      # Pinned rather than inferred, so the demo behaves the same everywhere.
+      #
+      # The pool normally sizes itself from availableProcessors(), which honours a container's CPU quota
+      # — on a Linux host. On Docker Desktop's WSL2 backend it does not: the limits are present in the
+      # cgroup (`cpu.max` reads `400000 100000` for the four below) but the JVM logs "controller memory
+      # is not enabled" and disables container support altogether, falling back to the host's core count.
+      # Left to itself it built 23 engines inside a four-CPU container.
+      LUDUS_ENGINE_POOL_SIZE: 3
+      JAVA_OPTS: "-XX:MaxRAMPercentage=70 -XX:+UseSerialGC -XX:MaxRAM=1g"
+    depends_on:
+      postgres:
+        # Not "started": the service runs Flyway migrations on boot and would fail against a Postgres
+        # that is up but not yet accepting connections.
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 40s
+    restart: unless-stopped
+    # Bounded on purpose, and not only to be polite to the host. Search is CPU-bound and the engine pool
+    # sizes itself from availableProcessors(), so with a limit the container decides how many engines
+    # exist rather than the machine underneath it. Without one the JVM sees every core, builds an engine
+    # for each, and a demo on a big machine reserves most of it to play one game.
+    #
+    # `cpus` and `mem_limit`, not `deploy.resources.limits`: the latter is a Swarm key that
+    # `docker compose up` accepts and ignores. Written the wrong way first, and the only sign was that
+    # the pool still reported an engine per host core.
+    cpus: 4.0
+    mem_limit: 1g
+
   # Where ludus-server keeps games. Also development-only: the engine itself stores nothing.
   postgres:
     image: postgres:17-alpine
@@ -25,6 +74,9 @@ services:
       retries: 12
 
   rabbitmq:
+    # Behind a profile: only the distributed match runner and distributed dataset generation need it,
+    # and starting a broker for somebody who wants to play a game is noise.
+    profiles: ["tooling"]
     image: rabbitmq:4-management
     container_name: ludus-rabbitmq
     ports:
