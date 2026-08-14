@@ -38,7 +38,14 @@ public record GameView(
         List<String> legalMoves,
         Instant createdAt,
         Instant updatedAt,
-        long version) {
+        long version,
+
+        /*
+         * What the engine thought about its last move, or null if it has not played one. Present here as
+         * well as in the response to a move, because a game is reachable by URL: reloading one, or opening
+         * somebody's link, would otherwise show nothing where its reasoning goes.
+         */
+        MoveResponse.EngineReply lastReply) {
 
     public static GameView of(Game game) {
         Board board = game.board();
@@ -58,6 +65,15 @@ public record GameView(
                 over ? List.of() : MoveCodec.legalMoves(board),
                 game.createdAt(),
                 game.updatedAt(),
-                game.version());
+                game.version(),
+                lastReplyOf(game));
+    }
+
+    private static MoveResponse.EngineReply lastReplyOf(Game game) {
+        if (game.lastMove() == null || game.lastDepth() == null) {
+            return null;
+        }
+        return new MoveResponse.EngineReply(
+                game.lastMove(), game.lastScore(), game.lastDepth(), game.lastNodes());
     }
 }

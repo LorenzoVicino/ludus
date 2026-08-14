@@ -104,6 +104,29 @@ class PlayingAGameTest {
     }
 
     @Test
+    @DisplayName("a game read back remembers what the engine thought, not just what it played")
+    void theLastReplySurvivesAReload() throws Exception {
+        // The point of storing it: a game is reachable by URL, so somebody opening a link or reloading
+        // the page must still see the engine's reasoning. It used to be returned once and lost.
+        JsonNode created = newGame("{\"difficulty\":\"BEGINNER\",\"playAsWhite\":true}");
+        String id = created.get("id").asText();
+        assertTrue(created.get("lastReply").isNull(), "nothing has been played yet");
+
+        String played = mvc.perform(post("/api/games/{id}/moves", id)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"move\":\"e2e4\"}"))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String answered = json.readTree(played).get("engineMove").get("move").asText();
+
+        mvc.perform(get("/api/games/{id}", id))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.lastReply.move").value(answered))
+                .andExpect(jsonPath("$.lastReply.depth").isNumber())
+                .andExpect(jsonPath("$.lastReply.nodes").isNumber());
+    }
+
+    @Test
     @DisplayName("giving the engine white makes it move before anybody asks")
     void engineMovesFirstAsWhite() throws Exception {
         JsonNode created = newGame("{\"difficulty\":\"BEGINNER\",\"playAsWhite\":false}");
